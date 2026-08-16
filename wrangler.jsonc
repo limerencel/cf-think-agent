@@ -10,9 +10,15 @@
     "run_worker_first": ["/agents/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "Assistant", "class_name": "Assistant" }]
+    "bindings": [
+      { "name": "Assistant", "class_name": "Assistant" },
+      { "name": "ConvoIndex", "class_name": "ConvoIndex" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Assistant"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Assistant"] },
+    { "tag": "v2", "new_sqlite_classes": ["ConvoIndex"] }
+  ],
   "vars": {
     "AIG_BASE_URL": "https://gateway.ai.cloudflare.com/v1/9a72e3f803ed0c6475d56b96513b7c5c/hermes-aig/custom-opencode/zen/go/v1",
     "MODEL_ID": "deepseek-v4-flash",

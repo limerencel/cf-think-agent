@@ -29,7 +29,8 @@ type Convo = { id: string; title: string; ts: number };
 
 const LS_KEY = "edgeagent.conversations";
 
-function loadConvs(): Convo[] {
+/** localStorage is a cache only; the cloud ConvoIndex DO is the source of truth. */
+function loadLocalConvs(): Convo[] {
   try {
     const raw = localStorage.getItem(LS_KEY);
     return raw ? (JSON.parse(raw) as Convo[]) : [];
@@ -38,12 +39,44 @@ function loadConvs(): Convo[] {
   }
 }
 
-function saveConvs(convos: Convo[]): void {
+function saveLocalConvs(convos: Convo[]): void {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(convos));
   } catch {
     // storage may be disabled (private mode / webview) — in-memory only is fine
   }
+}
+
+async function cloudListConvs(): Promise<Convo[]> {
+  const res = await fetch("/api/convos", { headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`cloud list ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; convos: Convo[] };
+  if (!data.ok) throw new Error("cloud list !ok");
+  return data.convos;
+}
+
+async function cloudTouchConvs(id: string, title?: string): Promise<Convo[]> {
+  const res = await fetch("/api/convos", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, title }),
+  });
+  if (!res.ok) throw new Error(`cloud touch ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; convos: Convo[] };
+  if (!data.ok) throw new Error("cloud touch !ok");
+  return data.convos;
+}
+
+async function cloudRemoveConvo(id: string): Promise<Convo[]> {
+  const res = await fetch("/api/convos/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error(`cloud remove ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; convos: Convo[] };
+  if (!data.ok) throw new Error("cloud remove !ok");
+  return data.convos;
 }
 
 function newId(): string {
@@ -276,24 +309,90 @@ export function App() {
 }
 
 function AppInner() {
-  const [convos, setConvos] = useState<Convo[]>(loadConvs);
-  const [active, setActive] = useState<string>(() => loadConvs()[0]?.id ?? newId());
+  const [convos, setConvos] = useState<Convo[]>(loadLocalConvs);
+  const [active, setActive] = useState<string>(() => loadLocalConvs()[0]?.id ?? newId());
   const [drawer, setDrawer] = useState(false);
+  const [cloudReady, setCloudReady] = useState(false);
+
+  // On mount: pull the cloud list as the source of truth. If we have local
+  // entries the cloud doesn't know yet (e.g. messages sent while storage was
+  // broken), merge them in and push back up so nothing is lost.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cloud = await cloudListConvs();
+        if (cancelled) return;
+        const local = loadLocalConvs();
+        const seen = new Set(cloud.map((c) => c.id));
+        const orphans = local.filter((c) => !seen.has(c.id));
+        const merged = [...cloud, ...orphans]
+          .sort((a, b) => b.ts - a.ts)
+          .slice(0, 30);
+        setConvos(merged);
+        saveLocalConvs(merged);
+        setCloudReady(true);
+        // If the current active id exists nowhere (fresh id from a broken
+        // storage session) and the cloud has conversations, open the most
+        // recent one so history is visible immediately.
+        if (merged.length > 0) {
+          const localIds = new Set(local.map((c) => c.id));
+          if (!localIds.has(active) && !merged.some((c) => c.id === active)) {
+            setActive(merged[0].id);
+          }
+        }
+        // push orphans back up so the cloud list converges
+        for (const o of orphans) {
+          try {
+            await cloudTouchConvs(o.id, o.title);
+          } catch {
+            /* best effort */
+          }
+        }
+      } catch {
+        // cloud unreachable — keep local cache as-is
+        if (!cancelled) setCloudReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    saveConvs(convos);
+    saveLocalConvs(convos);
   }, [convos]);
 
+  const applyCloud = (next: Convo[]) => {
+    setConvos(next);
+    saveLocalConvs(next);
+  };
+
   const touch = (id: string, title?: string) => {
+    const now = Date.now();
     setConvos((prev) => {
       const existing = prev.find((c) => c.id === id);
       const entry: Convo = {
         id,
         title: title ?? existing?.title ?? "New chat",
-        ts: Date.now(),
+        ts: now,
       };
       return [entry, ...prev.filter((c) => c.id !== id)].slice(0, 30);
     });
+    if (cloudReady) {
+      cloudTouchConvs(id, title).then(applyCloud).catch(() => {});
+    }
+  };
+
+  const removeConvo = (id: string) => {
+    setConvos((prev) => {
+      const next = prev.filter((x) => x.id !== id);
+      if (id === active) setActive(next[0]?.id ?? newId());
+      return next;
+    });
+    if (cloudReady) {
+      cloudRemoveConvo(id).then(applyCloud).catch(() => {});
+    }
   };
 
   const newChat = () => {
@@ -329,11 +428,7 @@ function AppInner() {
                 aria-label="Delete"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setConvos((prev) => {
-                    const next = prev.filter((x) => x.id !== c.id);
-                    if (c.id === active) setActive(next[0]?.id ?? newId());
-                    return next;
-                  });
+                  removeConvo(c.id);
                 }}
               >
                 <XIcon />
