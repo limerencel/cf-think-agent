@@ -232,6 +232,10 @@ main {
   gap: 24px;
   padding: 4px 0 16px;
 }
+/* chat scroll area: scrollbar always hidden */
+main, main:hover { scrollbar-width: none; }
+main::-webkit-scrollbar, main:hover::-webkit-scrollbar { display: none; width: 0; }
+main:hover::-webkit-scrollbar-thumb { background: transparent; }
 
 article.from-user {
   align-self: flex-end;
