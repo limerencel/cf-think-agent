@@ -29,6 +29,14 @@ export class Assistant extends Think<Env> {
     const openai = createOpenAI({
       apiKey: this.env.OPENCODE_GO_API_KEY,
       baseURL: this.env.AIG_BASE_URL,
+      headers: {
+        // Tag every AI Gateway request as coming from the Think edge agent,
+        // with the conversation id, so hermes-aig logs are filterable.
+        "cf-aig-metadata": JSON.stringify({
+          source: "think-edge-agent",
+          convo: this.name,
+        }),
+      },
     });
     return openai(this.env.MODEL_ID);
   }
