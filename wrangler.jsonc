@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cf-think-agent",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-07-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "preview_urls": false,
+  "workers_dev": true,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/agents/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "Assistant", "class_name": "Assistant" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Assistant"] }],
+  "vars": {
+    "AIG_BASE_URL": "https://gateway.ai.cloudflare.com/v1/9a72e3f803ed0c6475d56b96513b7c5c/hermes-aig/custom-opencode/zen/go/v1",
+    "MODEL_ID": "deepseek-v4-flash",
+    "GBRAIN_MCP_URL": "https://gbrain-mcp.itsuhiro.com/mcp"
+  },
+  "observability": { "enabled": true }
+}
