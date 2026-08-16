@@ -1,8 +1,11 @@
-import { Component, Suspense, type ReactNode, useEffect, useRef, useState } from "react";
+import { Component, Suspense, type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -124,6 +127,37 @@ function XIcon() {
   );
 }
 
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <rect x="5" y="5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M11 5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5.5A1.5 1.5 0 0 0 4 11h1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SideCollapseIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8 3.5v13" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 /* ---------------- small pieces ---------------- */
 
 function greeting(): string {
@@ -156,6 +190,70 @@ function ToolBits({ message }: { message: UIMessage }) {
           </span>
         );
       })}
+    </div>
+  );
+}
+
+/* ---------------- markdown rendering ---------------- */
+
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // children is the <code className="language-x"> element produced by react-markdown
+  const codeEl = children as ReactElement<{ className?: string }> | undefined;
+  const lang = /language-([\w-]+)/.exec(codeEl?.props?.className ?? "")?.[1] ?? "text";
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  const copy = async () => {
+    const text = ref.current?.querySelector("code")?.textContent ?? "";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="codeblock" ref={ref}>
+      <div className="codeblock-head">
+        <span className="codeblock-lang">{lang}</span>
+        <button type="button" className="codeblock-copy" onClick={copy} aria-label="Copy code">
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  );
+}
+
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{ pre: CodeBlock }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -244,17 +342,15 @@ function Chat({
     <div className={empty ? "page home" : "page chat"}>
       {!empty && (
         <header>
-          <button type="button" className="ghost" onClick={onMenu} aria-label="Menu">
+          <button type="button" className="ghost" onClick={onMenu} aria-label="Toggle sidebar">
             <MenuIcon />
           </button>
-          <span className="wordmark">edge agent</span>
-          <span className="spacer" />
         </header>
       )}
 
       {empty ? (
         <div className="home-inner">
-          <button type="button" className="ghost home-menu" onClick={onMenu} aria-label="Menu">
+          <button type="button" className="ghost home-menu" onClick={onMenu} aria-label="Toggle sidebar">
             <MenuIcon />
           </button>
           <h1>{greeting()}, Aki</h1>
@@ -286,7 +382,11 @@ function Chat({
             {messages.map((m) => (
               <article key={m.id} className={m.role === "user" ? "from-user" : "from-agent"}>
                 {m.role !== "user" && <ToolBits message={m} />}
-                <div className="body">{textOf(m)}</div>
+                {m.role === "user" ? (
+                  <div className="body">{textOf(m)}</div>
+                ) : (
+                  <Markdown text={textOf(m)} />
+                )}
               </article>
             ))}
             {busy && <div className="thinking">Thinking…</div>}
@@ -311,8 +411,17 @@ export function App() {
 function AppInner() {
   const [convos, setConvos] = useState<Convo[]>(loadLocalConvs);
   const [active, setActive] = useState<string>(() => loadLocalConvs()[0]?.id ?? newId());
-  const [drawer, setDrawer] = useState(false);
+  // Desktop: sidebar starts expanded and pushes content. Mobile: starts hidden, overlays.
+  const [sideOpen, setSideOpen] = useState<boolean>(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 900px)").matches
+  );
   const [cloudReady, setCloudReady] = useState(false);
+
+  const closeSideOnMobile = () => {
+    if (typeof window !== "undefined" && !window.matchMedia("(min-width: 900px)").matches) {
+      setSideOpen(false);
+    }
+  };
 
   // On mount: pull the cloud list as the source of truth. If we have local
   // entries the cloud doesn't know yet (e.g. messages sent while storage was
@@ -397,14 +506,34 @@ function AppInner() {
 
   const newChat = () => {
     setActive(newId());
-    setDrawer(false);
+    closeSideOnMobile();
   };
 
   return (
-    <div className="shell">
-      <aside className={drawer ? "open" : ""}>
+    <div className={"shell" + (sideOpen ? " side-open" : "")}>
+      {!sideOpen && (
+        <div className="side-rail">
+          <button
+            type="button"
+            className="ghost side-expand"
+            onClick={() => setSideOpen(true)}
+            aria-label="Expand sidebar"
+          >
+            <SideCollapseIcon />
+          </button>
+        </div>
+      )}
+      <aside className={sideOpen ? "open" : ""}>
         <div className="side-top">
           <span className="wordmark">edge agent</span>
+          <button
+            type="button"
+            className="ghost side-collapse"
+            onClick={() => setSideOpen(false)}
+            aria-label="Collapse sidebar"
+          >
+            <SideCollapseIcon />
+          </button>
         </div>
         <nav className="side-list">
           <button type="button" className="side-item new-chat" onClick={newChat}>
@@ -418,7 +547,7 @@ function AppInner() {
               className={"side-item" + (c.id === active ? " active" : "")}
               onClick={() => {
                 setActive(c.id);
-                setDrawer(false);
+                closeSideOnMobile();
               }}
             >
               <span className="side-title">{c.title}</span>
@@ -441,8 +570,6 @@ function AppInner() {
         </div>
       </aside>
 
-      {drawer && <div className="scrim" onClick={() => setDrawer(false)} />}
-
       <Suspense
         fallback={
           <div className="page home">
@@ -455,7 +582,7 @@ function AppInner() {
         <Chat
           key={active}
           convoId={active}
-          onMenu={() => setDrawer(true)}
+          onMenu={() => setSideOpen((v) => !v)}
           onFirstMessage={(text) => touch(active, text.slice(0, 48))}
         />
       </Suspense>
