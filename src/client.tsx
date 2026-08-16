@@ -88,14 +88,6 @@ function newId(): string {
 
 /* ---------------- icons ---------------- */
 
-function MenuIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" fill="none" />
-    </svg>
-  );
-}
-
 function PlusIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -313,11 +305,9 @@ const HINTS = [
 
 function Chat({
   convoId,
-  onMenu,
   onFirstMessage,
 }: {
   convoId: string;
-  onMenu: () => void;
   onFirstMessage: (text: string) => void;
 }) {
   const agent = useAgent({ agent: "Assistant", name: convoId });
@@ -340,19 +330,8 @@ function Chat({
 
   return (
     <div className={empty ? "page home" : "page chat"}>
-      {!empty && (
-        <header>
-          <button type="button" className="ghost" onClick={onMenu} aria-label="Toggle sidebar">
-            <MenuIcon />
-          </button>
-        </header>
-      )}
-
       {empty ? (
         <div className="home-inner">
-          <button type="button" className="ghost home-menu" onClick={onMenu} aria-label="Toggle sidebar">
-            <MenuIcon />
-          </button>
           <h1>{greeting()}, Aki</h1>
           <div className="home-composer">
             <Composer draft={draft} setDraft={setDraft} onSubmit={submit} busy={busy} />
@@ -512,6 +491,16 @@ function AppInner() {
   return (
     <div className={"shell" + (sideOpen ? " side-open" : "")}>
       {!sideOpen && (
+        <button
+          type="button"
+          className="ghost mobile-open"
+          onClick={() => setSideOpen(true)}
+          aria-label="Open sidebar"
+        >
+          <SideCollapseIcon />
+        </button>
+      )}
+      {!sideOpen && (
         <div className="side-rail">
           <button
             type="button"
@@ -570,6 +559,8 @@ function AppInner() {
         </div>
       </aside>
 
+      {sideOpen && <div className="tap-away" onClick={() => setSideOpen(false)} />}
+
       <Suspense
         fallback={
           <div className="page home">
@@ -582,7 +573,6 @@ function AppInner() {
         <Chat
           key={active}
           convoId={active}
-          onMenu={() => setSideOpen((v) => !v)}
           onFirstMessage={(text) => touch(active, text.slice(0, 48))}
         />
       </Suspense>

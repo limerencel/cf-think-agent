@@ -84,6 +84,18 @@ aside.open { transform: translateX(0); }
   aside.open { box-shadow: 8px 0 28px rgba(60, 50, 35, 0.16); }
 }
 
+/* mobile: invisible tap-away layer closes the sidebar (no dimming) */
+.tap-away { display: none; }
+@media (max-width: 899.98px) {
+  .tap-away {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    z-index: 25;
+  }
+}
+
 .side-top {
   display: flex;
   align-items: center;
@@ -175,7 +187,6 @@ aside.open { transform: translateX(0); }
   max-width: 680px;
   margin: 0 auto;
 }
-.home-menu { position: absolute; top: 14px; right: 14px; }
 .home h1 {
   margin: 0;
   font-family: var(--font-display);
@@ -201,15 +212,7 @@ aside.open { transform: translateX(0); }
 
 /* ---------- chat ---------- */
 
-.chat { max-width: 720px; margin: 0 auto; padding: 0 16px 16px; }
-
-header {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  height: 54px;
-  flex: 0 0 auto;
-}
+.chat { max-width: 720px; margin: 0 auto; padding: 16px 16px 16px; }
 
 .ghost {
   width: 34px;
@@ -448,6 +451,18 @@ article.from-agent { max-width: 100%; }
 
 /* collapsed rail: slim strip with the expand icon (desktop only) */
 .side-rail { display: none; }
+
+/* mobile: small top-left button to reopen the sidebar */
+.mobile-open { display: none; }
+@media (max-width: 899.98px) {
+  .mobile-open {
+    display: grid;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 20;
+  }
+}
 @media (min-width: 900px) {
   .side-rail {
     display: flex;
