@@ -1,25 +1,65 @@
 :root {
-  color-scheme: dark;
-  --bg: #141417;
-  --panel: #1e1e23;
-  --panel-2: #232329;
-  --ink: #ebebe6;
-  --muted: #8f8f89;
-  --line: #2c2c31;
-  --accent: #7aa2c4;
-  --ok: #7d9a78;
-  --run: #c4a35a;
-  --err: #b36060;
+  color-scheme: light;
+  --bg: #FAF8F3;
+  --panel: #F1EDE3;
+  --panel-2: #E9E3D6;
+  --surface: #FFFFFF;
+  --ink: #29261F;
+  --muted: #75705F;
+  --line: #E5E0D3;
+  --accent: #D97757;
+  --accent-hover: #C4643F;
+  --accent-soft: #F6E3D9;
+  --ok: #6B8F5E;
+  --run: #B08D3E;
+  --err: #B0544A;
+  --shadow-warm: 0 1px 2px rgba(60, 50, 35, 0.06);
+  --font-display: "Fraunces", Georgia, "Noto Serif TC", "Songti TC", serif;
+  --font-body: "Source Serif 4", Georgia, "Noto Serif TC", "Songti TC", serif;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #1F1C18;
+    --panel: #26221D;
+    --panel-2: #2E2A24;
+    --surface: #2D2923;
+    --ink: #E9E3D6;
+    --muted: #9C9482;
+    --line: #3C372E;
+    --accent: #D97757;
+    --accent-hover: #E08A6C;
+    --accent-soft: rgba(217, 119, 87, 0.16);
+    --ok: #8FAE7E;
+    --run: #C9A962;
+    --err: #C9705F;
+    --shadow-warm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
 }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
 button { font: inherit; }
+
+::selection { background: var(--accent-soft); }
+
+/* ---------- scrollbars: hidden until hover, thin ---------- */
+
+* { scrollbar-width: none; }
+*:hover { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+*:hover::-webkit-scrollbar-thumb { background: var(--line); }
+*:hover::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
 /* ---------- shell + sidebar ---------- */
 
@@ -28,7 +68,7 @@ button { font: inherit; }
 aside {
   position: fixed;
   inset: 0 auto 0 0;
-  width: 280px;
+  width: 272px;
   background: var(--panel);
   border-right: 1px solid var(--line);
   display: flex;
@@ -42,55 +82,51 @@ aside.open { transform: translateX(0); }
 .scrim {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(30, 25, 18, 0.4);
   z-index: 20;
 }
 
 .side-top {
   display: flex;
   align-items: center;
-  padding: 18px 16px 10px;
+  padding: 20px 20px 6px;
 }
 
-.brand { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--muted); }
-.mark { color: var(--accent); flex: 0 0 auto; }
-
-.new-chat {
-  margin: 8px 14px 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: center;
-  background: var(--panel-2);
+.wordmark {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 10px 0;
-  cursor: pointer;
 }
-.new-chat:hover { border-color: #3d3d44; }
 
-nav {
+.side-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  padding: 10px 10px 0;
 }
 .side-empty { color: var(--muted); font-size: 13px; padding: 8px 10px; }
 
 .side-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 10px;
-  border-radius: 10px;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--muted);
+  font-size: 13.5px;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .side-item:hover { background: var(--panel-2); color: var(--ink); }
 .side-item.active { background: var(--panel-2); color: var(--ink); }
+.side-item.new-chat { color: var(--ink); font-weight: 500; }
 .side-title {
   flex: 1;
-  font-size: 13.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -107,10 +143,10 @@ nav {
   cursor: pointer;
 }
 .side-item:hover .side-del { display: grid; }
-.side-del:hover { color: var(--err); background: var(--bg); }
+.side-del:hover { color: var(--err); }
 
 .side-foot {
-  padding: 14px 16px;
+  padding: 14px 20px;
   font-size: 11.5px;
   color: var(--muted);
   border-top: 1px solid var(--line);
@@ -127,22 +163,29 @@ nav {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 22px;
   padding: 24px 16px;
   max-width: 680px;
   margin: 0 auto;
 }
 .home-menu { position: absolute; top: 14px; left: 14px; }
-.home h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.home h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
 .home-composer { width: 100%; }
 
-.hints { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+.hints { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
 .hint {
   background: transparent;
   border: 0;
   color: var(--muted);
   font-size: 13px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 999px;
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
@@ -160,7 +203,7 @@ header {
   height: 54px;
   flex: 0 0 auto;
 }
-header .brand { color: var(--muted); }
+header .wordmark { font-size: 15px; }
 .spacer { width: 34px; }
 
 .ghost {
@@ -181,24 +224,31 @@ main {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 24px;
   padding: 4px 0 16px;
 }
 
 article.from-user {
   align-self: flex-end;
   max-width: 85%;
-  background: var(--panel);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 18px;
   padding: 10px 14px;
+  box-shadow: var(--shadow-warm);
 }
 article.from-agent { max-width: 100%; }
 
-.body { white-space: pre-wrap; line-height: 1.6; font-size: 15px; }
+.body {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  font-size: 15.5px;
+  font-family: var(--font-body);
+}
 
 .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chip {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 3px 9px;
   border-radius: 999px;
@@ -209,17 +259,24 @@ article.from-agent { max-width: 100%; }
 .chip.run { color: var(--run); }
 .chip.err { color: var(--err); }
 
-.thinking { color: var(--muted); font-size: 13px; }
+.thinking {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-family: var(--font-body);
+  font-style: italic;
+}
 
 /* ---------- composer ---------- */
 
 .composer {
-  background: var(--panel);
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-radius: 16px;
   padding: 14px 16px 10px;
   flex: 0 0 auto;
+  transition: border-color 0.15s ease;
 }
+.composer:focus-within { border-color: var(--accent); }
 .composer textarea {
   width: 100%;
   display: block;
@@ -228,8 +285,8 @@ article.from-agent { max-width: 100%; }
   resize: none;
   background: transparent;
   color: var(--ink);
-  font: inherit;
-  font-size: 15px;
+  font-family: var(--font-body);
+  font-size: 15.5px;
   line-height: 1.5;
   min-height: 24px;
   max-height: 176px;
@@ -244,31 +301,33 @@ article.from-agent { max-width: 100%; }
 }
 .pill {
   font-size: 12px;
-  color: var(--muted);
-  border: 1px solid var(--line);
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border: 0;
   border-radius: 999px;
   padding: 5px 12px;
   white-space: nowrap;
 }
 .send {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: 0;
   background: var(--accent);
-  color: #10161c;
+  color: #FFFFFF;
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition: background 0.15s ease, opacity 0.15s ease;
 }
+.send:hover:not(:disabled) { background: var(--accent-hover); }
 .send:disabled { opacity: 0.35; cursor: default; }
 
 /* desktop: sidebar becomes permanent */
 @media (min-width: 900px) {
   aside { transform: translateX(0); }
   .scrim { display: none; }
-  .shell { padding-left: 280px; }
+  .shell { padding-left: 272px; }
   .home-menu { display: none; }
   .chat header .ghost { visibility: hidden; }
   .home-menu, header .ghost { pointer-events: none; }

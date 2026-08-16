@@ -50,22 +50,7 @@ function newId(): string {
   return "c" + Math.random().toString(36).slice(2, 10);
 }
 
-/* ---------------- icons (original geometric mark) ---------------- */
-
-function Mark({ size = 24 }: { size?: number }) {
-  return (
-    <svg className="mark" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4L12 2.8z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
-    </svg>
-  );
-}
+/* ---------------- icons ---------------- */
 
 function MenuIcon() {
   return (
@@ -229,10 +214,7 @@ function Chat({
           <button type="button" className="ghost" onClick={onMenu} aria-label="Menu">
             <MenuIcon />
           </button>
-          <div className="brand">
-            <Mark size={16} />
-            <span>edge agent</span>
-          </div>
+          <span className="wordmark">edge agent</span>
           <span className="spacer" />
         </header>
       )}
@@ -242,7 +224,6 @@ function Chat({
           <button type="button" className="ghost home-menu" onClick={onMenu} aria-label="Menu">
             <MenuIcon />
           </button>
-          <Mark size={30} />
           <h1>{greeting()}, Aki</h1>
           <div className="home-composer">
             <Composer draft={draft} setDraft={setDraft} onSubmit={submit} busy={busy} />
@@ -324,16 +305,13 @@ function AppInner() {
     <div className="shell">
       <aside className={drawer ? "open" : ""}>
         <div className="side-top">
-          <div className="brand">
-            <Mark size={16} />
-            <span>edge agent</span>
-          </div>
+          <span className="wordmark">edge agent</span>
         </div>
-        <button type="button" className="new-chat" onClick={newChat}>
-          <PlusIcon />
-          New chat
-        </button>
-        <nav>
+        <nav className="side-list">
+          <button type="button" className="side-item new-chat" onClick={newChat}>
+            <PlusIcon />
+            New chat
+          </button>
           {convos.length === 0 && <p className="side-empty">No conversations yet</p>}
           {convos.map((c) => (
             <div
@@ -364,7 +342,7 @@ function AppInner() {
           ))}
         </nav>
         <div className="side-foot">
-          <span>Cloudflare edge · GBrain</span>
+          <span>Cloudflare Edge</span>
         </div>
       </aside>
 
@@ -374,7 +352,6 @@ function AppInner() {
         fallback={
           <div className="page home">
             <div className="home-inner">
-              <Mark size={30} />
               <h1>Connecting…</h1>
             </div>
           </div>
