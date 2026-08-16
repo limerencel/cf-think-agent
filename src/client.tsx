@@ -1,8 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, type ReactNode, useEffect, useRef, useState } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#ebebe6" }}>
+          <h2>Something went wrong</h2>
+          <pre style={{ whiteSpace: "pre-wrap", color: "#b36060" }}>{String(this.state.error)}</pre>
+          <button onClick={() => location.reload()}>Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /* ---------------- types & storage ---------------- */
 
@@ -16,6 +35,14 @@ function loadConvs(): Convo[] {
     return raw ? (JSON.parse(raw) as Convo[]) : [];
   } catch {
     return [];
+  }
+}
+
+function saveConvs(convos: Convo[]): void {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(convos));
+  } catch {
+    // storage may be disabled (private mode / webview) — in-memory only is fine
   }
 }
 
@@ -260,12 +287,20 @@ function Chat({
 /* ---------------- shell with sidebar ---------------- */
 
 export function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
+  );
+}
+
+function AppInner() {
   const [convos, setConvos] = useState<Convo[]>(loadConvs);
   const [active, setActive] = useState<string>(() => loadConvs()[0]?.id ?? newId());
   const [drawer, setDrawer] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify(convos));
+    saveConvs(convos);
   }, [convos]);
 
   const touch = (id: string, title?: string) => {
