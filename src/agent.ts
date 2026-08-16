@@ -20,6 +20,19 @@ import { gbrainCall } from "./gbrain";
 export class Assistant extends Think<Env> {
   override maxSteps = 16;
 
+  // Wait for MCP servers (Parallel search) to be connected before inference.
+  override waitForMcpConnections = { timeout: 10_000 };
+
+  override async onStart() {
+    await super.onStart();
+    // Free web search / URL extraction via Parallel MCP (no API key needed).
+    // addMcpServer persists the connection across hibernation; only add if
+    // it is not already present so repeated wakes don't stack duplicates.
+    if (!this.getMcpServers().servers["parallel"]) {
+      await this.addMcpServer("parallel", "https://search.parallel.ai/mcp");
+    }
+  }
+
   override workspace = new Workspace({
     storage: this.ctx.storage as unknown as DurableObjectStorageLike,
     useThink: true,
