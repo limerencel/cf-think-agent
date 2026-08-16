@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect, useRef, useState } from "react";
+import { Component, Suspense, type ReactNode, useEffect, useRef, useState } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart } from "ai";
@@ -370,12 +370,23 @@ function AppInner() {
 
       {drawer && <div className="scrim" onClick={() => setDrawer(false)} />}
 
-      <Chat
-        key={active}
-        convoId={active}
-        onMenu={() => setDrawer(true)}
-        onFirstMessage={(text) => touch(active, text.slice(0, 48))}
-      />
+      <Suspense
+        fallback={
+          <div className="page home">
+            <div className="home-inner">
+              <Mark size={30} />
+              <h1>Connecting…</h1>
+            </div>
+          </div>
+        }
+      >
+        <Chat
+          key={active}
+          convoId={active}
+          onMenu={() => setDrawer(true)}
+          onFirstMessage={(text) => touch(active, text.slice(0, 48))}
+        />
+      </Suspense>
     </div>
   );
 }
