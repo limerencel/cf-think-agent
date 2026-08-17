@@ -12,9 +12,9 @@ Browser WebUI (Think WebSocket)
          └─ GBrain MCP tools: query / search / get_page / put_page / recall / get_health
 ```
 
-- URL: https://think.itsuhiro.com/ (Cloudflare Access; allowed emails itsushimamura@gmail.com, hjy2441217743@gmail.com)
+- Authentication: Protected via Cloudflare Access (configurable in Cloudflare Zero Trust)
 - Each conversation = one Durable Object instance (`name=c<id>`); chat history persists in the DO.
-- Conversation list stored in localStorage (max 30). Delete only clears the local entry.
+- Conversation list stored in Cloudflare Durable Object SQLite with cross-device sync.
 
 ## Frontend
 

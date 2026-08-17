@@ -7,3 +7,4 @@ dist
 .wrangler
 *.log
 env.d.ts
+.workbuddy
