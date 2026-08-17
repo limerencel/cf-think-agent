@@ -11,7 +11,7 @@ import {
   Workspace,
 } from "@cloudflare/computer";
 import { createAITools } from "@cloudflare/computer/tools";
-import { Think } from "@cloudflare/think";
+import { Think, type TurnConfig, type TurnContext } from "@cloudflare/think";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
@@ -53,6 +53,38 @@ export class Assistant extends Think<Env> {
     });
     return openai(this.env.MODEL_ID);
   }
+
+  override beforeTurn(ctx: TurnContext): TurnConfig | void {
+    const custom = ctx.body?.customModel as
+      | {
+          endpoint?: string;
+          apiKey?: string;
+          modelId?: string;
+          temperature?: number;
+          maxTokens?: number;
+          topP?: number;
+        }
+      | undefined;
+
+    if (custom?.endpoint && custom?.modelId) {
+      const openai = createOpenAI({
+        apiKey: custom.apiKey?.trim() || "dummy-key",
+        baseURL: custom.endpoint.trim(),
+        headers: {
+          "cf-aig-metadata": JSON.stringify({
+            source: "think-edge-agent",
+            convo: this.name,
+            custom_model: custom.modelId,
+          }),
+        },
+      });
+      return {
+        model: openai(custom.modelId.trim()),
+      };
+    }
+  }
+
+
 
   override getSystemPrompt(): string {
     return [
