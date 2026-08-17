@@ -22,16 +22,6 @@ export interface ProviderConfig {
   topP?: number;
 }
 
-const DEFAULT_PRESET: ProviderConfig = {
-  id: "cf-default",
-  name: "Cloudflare AI Gateway",
-  endpoint: "",
-  apiKey: "",
-  selectedModel: "deepseek-v4-flash",
-  cachedModels: ["deepseek-v4-flash"],
-  isDefault: true,
-};
-
 const MAX_CONVOS = 30;
 
 export class ConvoIndex extends Agent<Env> {
@@ -60,6 +50,20 @@ export class ConvoIndex extends Agent<Env> {
         value TEXT NOT NULL
       );`
     );
+  }
+
+  private getDefaultPreset(): ProviderConfig {
+    const endpoint = this.env.AIG_BASE_URL || "";
+    const modelId = this.env.MODEL_ID || "deepseek-v4-flash";
+    return {
+      id: "cf-default",
+      name: "Cloudflare AI Gateway (Env Default)",
+      endpoint,
+      apiKey: "•••••••• (Cloudflare Secret: OPENCODE_GO_API_KEY)",
+      selectedModel: modelId,
+      cachedModels: [modelId],
+      isDefault: true,
+    };
   }
 
   /* ---------------- conversation list ---------------- */
@@ -113,6 +117,8 @@ export class ConvoIndex extends Agent<Env> {
       .exec("SELECT * FROM providers ORDER BY updated_at ASC")
       .toArray();
 
+    const defaultPreset = this.getDefaultPreset();
+
     const list: ProviderConfig[] = rows.map((r) => {
       let cached: string[] = [];
       try {
@@ -135,14 +141,25 @@ export class ConvoIndex extends Agent<Env> {
     });
 
     if (!list.some((p) => p.id === "cf-default")) {
-      return [DEFAULT_PRESET, ...list];
+      return [defaultPreset, ...list];
     }
-    return list;
+
+    return list.map((p) =>
+      p.id === "cf-default"
+        ? {
+            ...defaultPreset,
+            ...p,
+            endpoint: defaultPreset.endpoint || p.endpoint,
+            apiKey: defaultPreset.apiKey,
+            selectedModel: p.selectedModel || defaultPreset.selectedModel,
+          }
+        : p
+    );
   }
 
   @callable()
   async getProvider(id: string): Promise<ProviderConfig | null> {
-    if (id === "cf-default") return DEFAULT_PRESET;
+    if (id === "cf-default") return this.getDefaultPreset();
     await this.ensureTables();
     const rows = await this.ctx.storage.sql
       .exec("SELECT * FROM providers WHERE id = ?", id)
@@ -209,7 +226,6 @@ export class ConvoIndex extends Agent<Env> {
   async saveAllProviders(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
     await this.ensureTables();
     for (const p of providers) {
-      if (p.id === "cf-default") continue;
       await this.saveProvider(p);
     }
     return this.listProviders();

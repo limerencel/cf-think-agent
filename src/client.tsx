@@ -721,12 +721,25 @@ function ProviderEditor({
           placeholder="Provider Display Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          disabled={isPreset}
           required
         />
       </div>
 
-      {!isPreset && (
+      {isPreset ? (
+        <div className="info-card" style={{ marginBottom: 6 }}>
+          <div className="info-card-icon">
+            <SparklesIcon />
+          </div>
+          <div className="info-card-content">
+            <span className="info-card-title">Cloudflare Worker Native Preset</span>
+            <span className="info-card-desc">
+              Base URL: <code>{endpoint || "Loaded from wrangler.jsonc (AIG_BASE_URL)"}</code><br />
+              API Key: <code>Stored in Cloudflare Secret (OPENCODE_GO_API_KEY)</code><br />
+              Default Model: <code>{selectedModel}</code> (MODEL_ID in wrangler.jsonc)
+            </span>
+          </div>
+        </div>
+      ) : (
         <>
           <div className="form-group">
             <label className="form-label">
@@ -1155,7 +1168,7 @@ function SettingsModal({
                           </div>
                           <span className="provider-desc">
                             Model: <span className="provider-model-tag">{p.selectedModel}</span>
-                            {!isPreset && p.endpoint && ` · ${p.endpoint}`}
+                            {p.endpoint && ` · ${p.endpoint}`}
                           </span>
                         </div>
                         <div className="provider-actions" onClick={(e) => e.stopPropagation()}>
