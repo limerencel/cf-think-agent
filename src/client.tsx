@@ -553,6 +553,14 @@ function ModelCombobox({
       <div className="input-row">
         <input
           type="text"
+          name="model_id_input"
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-form-type="other"
           className="text-input"
           value={value}
           onChange={(e) => {
@@ -709,7 +717,7 @@ function ProviderEditor({
   const isPreset = provider.id === "cf-default";
 
   return (
-    <form className="form-grid" onSubmit={handleSubmit}>
+    <form className="form-grid" onSubmit={handleSubmit} autoComplete="off" data-lpignore="true" data-1p-ignore="true">
       <div className="form-group">
         <label className="form-label">
           Provider Name
@@ -717,6 +725,14 @@ function ProviderEditor({
         </label>
         <input
           type="text"
+          name="provider_name_field"
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-form-type="other"
           className="text-input"
           placeholder="Provider Display Name"
           value={name}
@@ -747,7 +763,15 @@ function ProviderEditor({
               <span className="form-hint">OpenAI Compatible</span>
             </label>
             <input
-              type="url"
+              type="text"
+              name="provider_endpoint_field"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               className="text-input"
               placeholder="https://openrouter.ai/api/v1 or https://api.deepseek.com/v1"
               value={endpoint}
@@ -760,8 +784,16 @@ function ProviderEditor({
             <label className="form-label">API Key</label>
             <div className="input-row">
               <input
-                type={showApiKey ? "text" : "password"}
-                className="text-input"
+                type="text"
+                name="provider_key_field"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
+                className={showApiKey ? "text-input" : "text-input key-masked"}
                 placeholder="sk-..."
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
