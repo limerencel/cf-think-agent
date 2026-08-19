@@ -47,6 +47,7 @@ export interface ProviderConfig {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  reasoningEffort?: "low" | "medium" | "high" | "none";
 }
 
 const DEFAULT_PRESET: ProviderConfig = {
@@ -419,6 +420,23 @@ function newId(): string {
 
 /* ---------------- icons ---------------- */
 
+function BrainIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04z" />
+    </svg>
+  );
+}
+
+function ZapIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  );
+}
+
 function TerminalIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -696,6 +714,105 @@ function ToolBits({ message }: { message: UIMessage }) {
   );
 }
 
+/* ---------------- Reasoning & Chain of Thought ---------------- */
+
+interface ExtractedMessageContent {
+  thoughtText: string | null;
+  mainText: string;
+  isThinking: boolean;
+}
+
+function extractThoughtAndAnswer(message: UIMessage): ExtractedMessageContent {
+  let thoughtPartsText = "";
+  let textPartsText = "";
+
+  for (const part of message.parts) {
+    if (part.type === "reasoning" || (part as any).type === "thought") {
+      thoughtPartsText += (part as any).text || (part as any).reasoning || (part as any).thought || "";
+    } else if (part.type === "text") {
+      textPartsText += (part as { type: "text"; text: string }).text || "";
+    }
+  }
+
+  // Detect <think>...</think> tags embedded inside LLM text output (e.g. DeepSeek-R1, QwQ)
+  if (textPartsText.includes("<think>")) {
+    const thinkStart = textPartsText.indexOf("<think>");
+    const thinkEnd = textPartsText.indexOf("</think>");
+
+    if (thinkEnd !== -1) {
+      const thoughtInTag = textPartsText.substring(thinkStart + 7, thinkEnd).trim();
+      const before = textPartsText.substring(0, thinkStart);
+      const after = textPartsText.substring(thinkEnd + 8);
+      const cleanedMain = (before + after).trim();
+      const combinedThought = (thoughtPartsText ? thoughtPartsText + "\n\n" : "") + thoughtInTag;
+
+      return {
+        thoughtText: combinedThought.trim() || null,
+        mainText: cleanedMain,
+        isThinking: false,
+      };
+    } else {
+      const thoughtInTag = textPartsText.substring(thinkStart + 7).trim();
+      const before = textPartsText.substring(0, thinkStart).trim();
+      const combinedThought = (thoughtPartsText ? thoughtPartsText + "\n\n" : "") + thoughtInTag;
+
+      return {
+        thoughtText: combinedThought.trim() || null,
+        mainText: before,
+        isThinking: true,
+      };
+    }
+  }
+
+  return {
+    thoughtText: thoughtPartsText.trim() ? thoughtPartsText.trim() : null,
+    mainText: textPartsText,
+    isThinking: false,
+  };
+}
+
+function ThoughtBlock({ thought, isThinking }: { thought: string; isThinking?: boolean }) {
+  const [open, setOpen] = useState(isThinking ?? false);
+
+  useEffect(() => {
+    if (isThinking) setOpen(true);
+  }, [isThinking]);
+
+  return (
+    <div className={`thought-container ${open ? "open" : "collapsed"}`}>
+      <button
+        type="button"
+        className="thought-toggle-btn"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <div className="thought-toggle-left">
+          <span className="thought-sparkle-icon">
+            <BrainIcon />
+          </span>
+          <span className="thought-title">
+            {isThinking ? "Thinking in progress…" : "Chain of Thought"}
+          </span>
+          {!isThinking && (
+            <span className="thought-length-badge">
+              {thought.length} chars
+            </span>
+          )}
+        </div>
+        <div className="thought-toggle-right">
+          <span className="thought-chevron">{open ? <ChevronDownIcon /> : <ChevronRightIcon />}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="thought-content">
+          <Markdown text={thought} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- markdown rendering ---------------- */
 
 function CodeBlock({ children }: { children?: ReactNode }) {
@@ -886,11 +1003,17 @@ function ProviderEditor({
 
   // Advanced parameters
   const [showAdvanced, setShowAdvanced] = useState(
-    provider.temperature !== undefined || provider.maxTokens !== undefined || provider.topP !== undefined
+    provider.temperature !== undefined ||
+      provider.maxTokens !== undefined ||
+      provider.topP !== undefined ||
+      provider.reasoningEffort !== undefined
   );
   const [temperature, setTemperature] = useState<number | undefined>(provider.temperature);
   const [maxTokens, setMaxTokens] = useState<number | undefined>(provider.maxTokens);
   const [topP, setTopP] = useState<number | undefined>(provider.topP);
+  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | undefined>(
+    provider.reasoningEffort === "none" ? undefined : provider.reasoningEffort
+  );
 
   const [loadingModels, setLoadingModels] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -955,6 +1078,7 @@ function ProviderEditor({
       temperature,
       maxTokens,
       topP,
+      reasoningEffort: reasoningEffort || undefined,
     };
     onSave(updated);
   };
@@ -1177,6 +1301,29 @@ function ProviderEditor({
                 >
                   Reset
                 </button>
+              </div>
+            </div>
+
+            {/* Reasoning Effort (Chain of Thought) */}
+            <div className="param-row">
+              <div className="param-row-head">
+                <span className="param-label">Reasoning Effort (Chain of Thought)</span>
+                <span className="param-val">
+                  {reasoningEffort ? reasoningEffort.toUpperCase() : "Default / Model Setting"}
+                </span>
+              </div>
+              <div className="segmented-nav" style={{ width: "100%" }}>
+                {(["none", "low", "medium", "high"] as const).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={`tab-btn ${(reasoningEffort || "none") === lvl ? "active" : ""}`}
+                    style={{ flex: 1, justifyContent: "center", fontSize: 12 }}
+                    onClick={() => setReasoningEffort(lvl === "none" ? undefined : lvl)}
+                  >
+                    {lvl === "none" ? "Default" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -2347,6 +2494,7 @@ function Composer({
   providers,
   onSelectProvider,
   onOpenSettings,
+  onUpdateReasoningEffort,
 }: {
   draft: string;
   setDraft: (v: string) => void;
@@ -2356,6 +2504,7 @@ function Composer({
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
   onOpenSettings: () => void;
+  onUpdateReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -2391,6 +2540,12 @@ function Composer({
         >
           <SparklesIcon />
           <span>{activeProvider.name}: {activeProvider.selectedModel}</span>
+          {activeProvider.reasoningEffort && activeProvider.reasoningEffort !== "none" && (
+            <span className="reasoning-effort-badge" title={`Reasoning Effort: ${activeProvider.reasoningEffort}`}>
+              <ZapIcon />
+              <span>{activeProvider.reasoningEffort.toUpperCase()}</span>
+            </span>
+          )}
           <span className={`pill-caret ${menuOpen ? "open" : ""}`}>
             <ChevronDownIcon />
           </span>
@@ -2418,6 +2573,25 @@ function Composer({
                   {p.id === activeProvider.id && <CheckIcon />}
                 </button>
               ))}
+
+              <div className="popover-divider" />
+              <div className="popover-section-label">Reasoning Effort (CoT)</div>
+              <div className="segmented-nav" style={{ margin: "4px 8px 8px", padding: 2 }}>
+                {(["none", "low", "medium", "high"] as const).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={`tab-btn ${(activeProvider.reasoningEffort || "none") === lvl ? "active" : ""}`}
+                    style={{ flex: 1, justifyContent: "center", fontSize: 11, padding: "4px 2px" }}
+                    onClick={() => {
+                      if (onUpdateReasoningEffort) onUpdateReasoningEffort(lvl);
+                    }}
+                  >
+                    {lvl === "none" ? "Off" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                  </button>
+                ))}
+              </div>
+
               <div className="popover-divider" />
               <button
                 type="button"
@@ -2613,6 +2787,7 @@ function Chat({
   providers,
   onSelectProvider,
   onOpenSettings,
+  onUpdateProviderReasoningEffort,
   mcpServers,
   customSystemPrompt,
   systemPromptMode,
@@ -2623,6 +2798,7 @@ function Chat({
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
   onOpenSettings: () => void;
+  onUpdateProviderReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
   mcpServers: McpServerConfig[];
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
@@ -2647,6 +2823,7 @@ function Chat({
               temperature: activeProvider.temperature,
               maxTokens: activeProvider.maxTokens,
               topP: activeProvider.topP,
+              reasoningEffort: activeProvider.reasoningEffort,
             }
           : undefined,
     }),
@@ -2701,6 +2878,7 @@ function Chat({
               providers={providers}
               onSelectProvider={onSelectProvider}
               onOpenSettings={onOpenSettings}
+              onUpdateReasoningEffort={onUpdateProviderReasoningEffort}
             />
             <div className="hints">
               {HINTS.map((h) => (
@@ -2727,11 +2905,31 @@ function Chat({
           <main>
             {messages.map((m) => (
               <article key={m.id} className={m.role === "user" ? "from-user" : "from-agent"}>
-                {m.role !== "user" && <ToolBits message={m} />}
                 {m.role === "user" ? (
                   <div className="body">{textOf(m)}</div>
                 ) : (
-                  <Markdown text={textOf(m)} />
+                  (() => {
+                    const { thoughtText, mainText, isThinking } = extractThoughtAndAnswer(m);
+                    return (
+                      <>
+                        <ToolBits message={m} />
+                        {thoughtText && (
+                          <ThoughtBlock
+                            thought={thoughtText}
+                            isThinking={
+                              isThinking ||
+                              (busy && m.id === messages[messages.length - 1]?.id && !mainText)
+                            }
+                          />
+                        )}
+                        {mainText ? (
+                          <Markdown text={mainText} />
+                        ) : isThinking || (busy && m.id === messages[messages.length - 1]?.id) ? null : (
+                          <Markdown text={textOf(m)} />
+                        )}
+                      </>
+                    );
+                  })()
                 )}
               </article>
             ))}
@@ -2758,6 +2956,7 @@ function Chat({
             providers={providers}
             onSelectProvider={onSelectProvider}
             onOpenSettings={onOpenSettings}
+            onUpdateReasoningEffort={onUpdateProviderReasoningEffort}
           />
         </>
       )}
@@ -2850,6 +3049,14 @@ function AppInner() {
     setMcpServers(newServers);
     saveLocalMcpServers(newServers);
     cloudSaveAllMcpServers(newServers).catch(() => {});
+  };
+
+  const handleUpdateProviderReasoningEffort = (effort: "none" | "low" | "medium" | "high") => {
+    const val = effort === "none" ? undefined : effort;
+    const updated = providers.map((p) =>
+      p.id === activeProviderId ? { ...p, reasoningEffort: val } : p
+    );
+    handleSaveProviders(updated);
   };
 
   const handleSaveSystemPrompt = (newPrompt: string, newMode: "append" | "override") => {
@@ -3176,6 +3383,7 @@ function AppInner() {
           providers={providers}
           onSelectProvider={handleSelectActiveProvider}
           onOpenSettings={() => setSettingsOpen(true)}
+          onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
           mcpServers={mcpServers}
           customSystemPrompt={customSystemPrompt}
           systemPromptMode={systemPromptMode}

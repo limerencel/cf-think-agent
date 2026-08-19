@@ -22,6 +22,7 @@ export interface ProviderConfig {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  reasoningEffort?: "low" | "medium" | "high" | "none";
 }
 
 export type { McpServerConfig, McpToolDef };
@@ -50,6 +51,7 @@ export class ConvoIndex extends Agent<Env> {
         temperature REAL,
         max_tokens INTEGER,
         top_p REAL,
+        reasoning_effort TEXT,
         updated_at INTEGER NOT NULL
       )`
     );
@@ -92,10 +94,17 @@ export class ConvoIndex extends Agent<Env> {
         created_at INTEGER NOT NULL
       )`
     );
-    // Migration: ensure use_response_api column exists in SQLite
+    // Migration: ensure use_response_api and reasoning_effort columns exist in SQLite
     try {
       await this.ctx.storage.sql.exec(
         "ALTER TABLE providers ADD COLUMN use_response_api INTEGER NOT NULL DEFAULT 0"
+      );
+    } catch {
+      /* ignore if column already exists */
+    }
+    try {
+      await this.ctx.storage.sql.exec(
+        "ALTER TABLE providers ADD COLUMN reasoning_effort TEXT"
       );
     } catch {
       /* ignore if column already exists */
@@ -208,6 +217,7 @@ export class ConvoIndex extends Agent<Env> {
         temperature: r.temperature !== null ? Number(r.temperature) : undefined,
         maxTokens: r.max_tokens !== null ? Number(r.max_tokens) : undefined,
         topP: r.top_p !== null ? Number(r.top_p) : undefined,
+        reasoningEffort: (r.reasoning_effort as "low" | "medium" | "high" | "none") || undefined,
       };
     });
 
@@ -256,6 +266,7 @@ export class ConvoIndex extends Agent<Env> {
       temperature: r.temperature !== null ? Number(r.temperature) : undefined,
       maxTokens: r.max_tokens !== null ? Number(r.max_tokens) : undefined,
       topP: r.top_p !== null ? Number(r.top_p) : undefined,
+      reasoningEffort: (r.reasoning_effort as "low" | "medium" | "high" | "none") || undefined,
     };
   }
 
@@ -267,8 +278,8 @@ export class ConvoIndex extends Agent<Env> {
     }
     const cachedJson = JSON.stringify(provider.cachedModels || [provider.selectedModel]);
     await this.ctx.storage.sql.exec(
-      `INSERT INTO providers (id, name, endpoint, api_key, selected_model, cached_models, is_default, use_response_api, temperature, max_tokens, top_p, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO providers (id, name, endpoint, api_key, selected_model, cached_models, is_default, use_response_api, temperature, max_tokens, top_p, reasoning_effort, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          endpoint = excluded.endpoint,
@@ -280,6 +291,7 @@ export class ConvoIndex extends Agent<Env> {
          temperature = excluded.temperature,
          max_tokens = excluded.max_tokens,
          top_p = excluded.top_p,
+         reasoning_effort = excluded.reasoning_effort,
          updated_at = excluded.updated_at`,
       provider.id,
       provider.name,
@@ -292,6 +304,7 @@ export class ConvoIndex extends Agent<Env> {
       provider.temperature ?? null,
       provider.maxTokens ?? null,
       provider.topP ?? null,
+      provider.reasoningEffort ?? null,
       Date.now()
     );
     return this.listProviders();

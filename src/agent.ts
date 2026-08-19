@@ -86,6 +86,7 @@ export class Assistant extends Think<Env> {
           temperature?: number;
           maxTokens?: number;
           topP?: number;
+          reasoningEffort?: "low" | "medium" | "high" | "none";
         }
       | undefined;
 
@@ -102,6 +103,7 @@ export class Assistant extends Think<Env> {
             source: "think-edge-agent",
             convo: this.name,
             custom_model: custom.modelId,
+            reasoning_effort: custom.reasoningEffort || undefined,
             protocol: isResponse ? "responses" : "chat_completions",
           }),
         },
