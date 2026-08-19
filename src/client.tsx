@@ -609,6 +609,15 @@ function SideCollapseIcon() {
   );
 }
 
+function PanelRightIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M12 3.5v13" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function SettingsIcon() {
   return (
     <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
@@ -1215,8 +1224,6 @@ function WorkspacePanel({
     }
   };
 
-  if (!isOpen) return null;
-
   const filteredFiles = files.filter(
     (f) => !searchQuery || f.path.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -1225,65 +1232,62 @@ function WorkspacePanel({
   const lang = selectedFile ? getFileLanguage(selectedFile.name) : "text";
 
   return (
-    <aside className="workspace-panel">
+    <aside className={"workspace-drawer" + (isOpen ? " open" : "")}>
       {/* Workspace Panel Header */}
-      <div className="workspace-header">
-        <div className="workspace-title-row">
-          <div className="workspace-title">
-            <FolderIcon />
-            <span>Workspace</span>
-            <span className="workspace-count-badge">{files.length}</span>
-          </div>
-          <div className="workspace-actions">
-            <button
-              type="button"
-              className="ghost icon-btn"
-              onClick={() => refreshFiles(false)}
-              disabled={loading}
-              title="Refresh workspace files"
-              aria-label="Refresh"
-            >
-              <RefreshIcon />
-            </button>
-            {files.length > 0 && (
-              <button
-                type="button"
-                className="workspace-zip-btn"
-                onClick={handleDownloadZip}
-                disabled={downloadingZip}
-                title="Download all files as .zip archive"
-              >
-                <DownloadIcon />
-                <span>{downloadingZip ? "Archiving…" : "ZIP"}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              className="ghost icon-btn"
-              onClick={onClose}
-              title="Close workspace panel"
-              aria-label="Close workspace"
-            >
-              <XIcon />
-            </button>
-          </div>
+      <div className="side-top workspace-side-top">
+        <div className="workspace-top-title">
+          <span className="wordmark">workspace</span>
+          {files.length > 0 && <span className="workspace-count-badge">{files.length}</span>}
         </div>
-
-        {/* Search input if more than 3 files */}
-        {files.length > 3 && (
-          <div className="workspace-search">
-            <input
-              type="text"
-              placeholder="Filter files…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        )}
+        <div className="workspace-top-actions">
+          <button
+            type="button"
+            className="ghost side-icon-btn"
+            onClick={() => refreshFiles(false)}
+            disabled={loading}
+            title="Refresh workspace files"
+            aria-label="Refresh"
+          >
+            <RefreshIcon />
+          </button>
+          {files.length > 0 && (
+            <button
+              type="button"
+              className="workspace-zip-pill"
+              onClick={handleDownloadZip}
+              disabled={downloadingZip}
+              title="Download all files as .zip archive"
+            >
+              <DownloadIcon />
+              <span>{downloadingZip ? "Archiving…" : "ZIP"}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="ghost side-collapse"
+            onClick={onClose}
+            title="Collapse workspace"
+            aria-label="Collapse workspace"
+          >
+            <PanelRightIcon />
+          </button>
+        </div>
       </div>
 
+      {/* Search bar if many files */}
+      {files.length > 3 && (
+        <div className="workspace-search-bar">
+          <input
+            type="text"
+            placeholder="Filter files…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+      )}
+
       {/* Main Workspace Body */}
-      <div className="workspace-body">
+      <div className="workspace-drawer-body">
         {files.length === 0 ? (
           <div className="workspace-empty">
             <div className="workspace-empty-icon">
@@ -1293,9 +1297,6 @@ function WorkspacePanel({
             <p>
               Files created by the agent in this session will appear here in real-time.
             </p>
-            <div className="workspace-empty-hint">
-              💡 <em>Try asking: "Write a script in workspace to fetch..."</em>
-            </div>
           </div>
         ) : (
           <div className="workspace-content">
@@ -3293,9 +3294,6 @@ function Chat({
   mcpServers,
   customSystemPrompt,
   systemPromptMode,
-  workspaceOpen,
-  onToggleWorkspace,
-  workspaceFileCount = 0,
   onTriggerWorkspaceRefresh,
 }: {
   convoId: string;
@@ -3308,9 +3306,6 @@ function Chat({
   mcpServers: McpServerConfig[];
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
-  workspaceOpen?: boolean;
-  onToggleWorkspace?: () => void;
-  workspaceFileCount?: number;
   onTriggerWorkspaceRefresh?: () => void;
 }) {
   const agent = useAgent({ agent: "Assistant", name: convoId });
@@ -3384,31 +3379,6 @@ function Chat({
 
   return (
     <div className={empty ? "page home" : "page chat"}>
-      {/* Subtle Chat Topbar with Quick Workspace Toggle */}
-      {!empty && (
-        <div className="chat-topbar">
-          <div className="chat-topbar-left">
-            <span className="chat-topbar-model">
-              {activeProvider.selectedModel || activeProvider.name}
-            </span>
-          </div>
-          <div className="chat-topbar-right">
-            <button
-              type="button"
-              className={`chat-workspace-btn ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
-              onClick={onToggleWorkspace}
-              title="Toggle Workspace File Explorer & Previewer"
-            >
-              <FolderIcon />
-              <span>Workspace</span>
-              {workspaceFileCount > 0 && (
-                <span className="chat-workspace-badge">{workspaceFileCount}</span>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
       {empty ? (
         <div className="home-inner">
           <h1>{greeting()}, Aki</h1>
@@ -3549,7 +3519,7 @@ function AppInner() {
   // Settings Modal State
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // 3-Column Coding Agent Workspace State
+  // Right Workspace Drawer State
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceFileCount, setWorkspaceFileCount] = useState(0);
   const [workspaceRefreshToken, setWorkspaceRefreshToken] = useState(0);
@@ -3726,7 +3696,8 @@ function AppInner() {
   };
 
   return (
-    <div className={"shell" + (sideOpen ? " side-open" : "") + (workspaceOpen ? " with-workspace" : "")}>
+    <div className={"shell" + (sideOpen ? " side-open" : "") + (workspaceOpen ? " workspace-open" : "")}>
+      {/* Mobile Top Header */}
       <header className="app-header">
         <div className="header-left">
           <button
@@ -3743,17 +3714,6 @@ function AppInner() {
         <div className="header-right">
           <button
             type="button"
-            className={`btn-workspace-toggle ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
-            onClick={() => setWorkspaceOpen((prev) => !prev)}
-            aria-label="Toggle Workspace"
-            title="Toggle Workspace File Explorer"
-          >
-            <FolderIcon />
-            <span>Workspace</span>
-            {workspaceFileCount > 0 && <span className="workspace-badge">{workspaceFileCount}</span>}
-          </button>
-          <button
-            type="button"
             className="btn-new-chat-header"
             onClick={newChat}
             aria-label="New chat"
@@ -3762,10 +3722,36 @@ function AppInner() {
             <PlusIcon />
             <span>New chat</span>
           </button>
+          <button
+            type="button"
+            className={`ghost header-workspace-btn ${workspaceOpen ? "active" : ""}`}
+            onClick={() => setWorkspaceOpen((prev) => !prev)}
+            aria-label="Toggle Workspace"
+            title="Workspace Files"
+          >
+            <PanelRightIcon />
+            {workspaceFileCount > 0 && <span className="workspace-indicator-dot" />}
+          </button>
         </div>
       </header>
 
-      {/* Desktop Collapsed Floating Rail */}
+      {/* Desktop Floating Top-Right Workspace Toggle Button */}
+      {!workspaceOpen && (
+        <div className="top-right-bar">
+          <button
+            type="button"
+            className="ghost top-right-workspace-btn"
+            onClick={() => setWorkspaceOpen(true)}
+            aria-label="Open Workspace Panel"
+            title="Workspace Files"
+          >
+            <PanelRightIcon />
+            {workspaceFileCount > 0 && <span className="workspace-indicator-dot" />}
+          </button>
+        </div>
+      )}
+
+      {/* Desktop Collapsed Floating Rail (Left) */}
       {!sideOpen && (
         <div className="side-rail">
           <div className="side-rail-top">
@@ -3786,15 +3772,6 @@ function AppInner() {
               title="New conversation"
             >
               <PlusIcon />
-            </button>
-            <button
-              type="button"
-              className={`ghost side-rail-workspace ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
-              onClick={() => setWorkspaceOpen((prev) => !prev)}
-              aria-label="Toggle Workspace"
-              title={`Workspace Files (${workspaceFileCount})`}
-            >
-              <FolderIcon />
             </button>
           </div>
           <div className="side-rail-bottom">
@@ -3820,7 +3797,8 @@ function AppInner() {
         </div>
       )}
 
-      <aside className={sideOpen ? "open" : ""}>
+      {/* Left Sidebar (Conversations) */}
+      <aside className={"left-sidebar" + (sideOpen ? " open" : "")}>
         <div className="side-top">
           <span className="wordmark">edge agent</span>
           <button
@@ -3828,6 +3806,7 @@ function AppInner() {
             className="ghost side-collapse"
             onClick={() => setSideOpen(false)}
             aria-label="Collapse sidebar"
+            title="Collapse sidebar"
           >
             <SideCollapseIcon />
           </button>
@@ -3887,48 +3866,44 @@ function AppInner() {
         </div>
       </aside>
 
+      {/* Mobile Backdrops */}
       {sideOpen && <div className="tap-away" onClick={() => setSideOpen(false)} />}
+      {workspaceOpen && <div className="tap-away" onClick={() => setWorkspaceOpen(false)} />}
 
-      {/* Main 3-Column Layout: Chat Center + Workspace Right */}
-      <div className="app-main-container">
-        <div className="chat-viewport">
-          <Suspense
-            fallback={
-              <div className="page home">
-                <div className="home-inner">
-                  <h1>Connecting…</h1>
-                </div>
-              </div>
-            }
-          >
-            <Chat
-              key={active}
-              convoId={active}
-              onFirstMessage={(text) => touch(active, text.slice(0, 48))}
-              activeProvider={activeProvider}
-              providers={providers}
-              onSelectProvider={handleSelectActiveProvider}
-              onOpenSettings={() => setSettingsOpen(true)}
-              onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
-              mcpServers={mcpServers}
-              customSystemPrompt={customSystemPrompt}
-              systemPromptMode={systemPromptMode}
-              workspaceOpen={workspaceOpen}
-              onToggleWorkspace={() => setWorkspaceOpen((prev) => !prev)}
-              workspaceFileCount={workspaceFileCount}
-              onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
-            />
-          </Suspense>
-        </div>
-
-        <WorkspacePanel
+      {/* Center Main Chat */}
+      <Suspense
+        fallback={
+          <div className="page home">
+            <div className="home-inner">
+              <h1>Connecting…</h1>
+            </div>
+          </div>
+        }
+      >
+        <Chat
+          key={active}
           convoId={active}
-          isOpen={workspaceOpen}
-          onClose={() => setWorkspaceOpen(false)}
-          onFileCountUpdate={(count) => setWorkspaceFileCount(count)}
-          refreshToken={workspaceRefreshToken}
+          onFirstMessage={(text) => touch(active, text.slice(0, 48))}
+          activeProvider={activeProvider}
+          providers={providers}
+          onSelectProvider={handleSelectActiveProvider}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
+          mcpServers={mcpServers}
+          customSystemPrompt={customSystemPrompt}
+          systemPromptMode={systemPromptMode}
+          onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
         />
-      </div>
+      </Suspense>
+
+      {/* Right Workspace Drawer */}
+      <WorkspacePanel
+        convoId={active}
+        isOpen={workspaceOpen}
+        onClose={() => setWorkspaceOpen(false)}
+        onFileCountUpdate={(count) => setWorkspaceFileCount(count)}
+        refreshToken={workspaceRefreshToken}
+      />
 
       <SettingsModal
         isOpen={settingsOpen}
