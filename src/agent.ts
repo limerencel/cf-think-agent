@@ -12,6 +12,7 @@ import {
 } from "@cloudflare/computer";
 import { createAITools } from "@cloudflare/computer/tools";
 import { Think, type TurnConfig, type TurnContext } from "@cloudflare/think";
+import { callable } from "agents";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
@@ -224,5 +225,113 @@ export class Assistant extends Think<Env> {
         execute: async ({ query }) => gbrainCall(url, token, "recall", { query }),
       }),
     };
+  }
+
+  @callable()
+  async getWorkspaceFiles(): Promise<{
+    files: Array<{
+      path: string;
+      name: string;
+      size: number;
+      mtime?: number;
+      isDirectory: boolean;
+    }>;
+  }> {
+    const list: Array<{
+      path: string;
+      name: string;
+      size: number;
+      mtime?: number;
+      isDirectory: boolean;
+    }> = [];
+
+    const visited = new Set<string>();
+
+    const scanDirectory = async (dirPath: string) => {
+      if (visited.has(dirPath)) return;
+      visited.add(dirPath);
+      try {
+        const entries = (await (this.workspace as any).readdir?.(dirPath)) ||
+                        (await (this.workspace as any).fs?.readdir?.(dirPath)) ||
+                        [];
+        for (const entry of entries) {
+          const name = entry.name || "";
+          if (!name || name === "." || name === "..") continue;
+          const fullPath = dirPath === "/" ? `/${name}` : `${dirPath}/${name}`;
+          const isDir = !!entry.isDirectory;
+          list.push({
+            path: fullPath,
+            name,
+            size: entry.size || 0,
+            mtime: entry.mtime,
+            isDirectory: isDir,
+          });
+          if (isDir) {
+            await scanDirectory(fullPath);
+          }
+        }
+      } catch {
+        /* ignore error on single dir scan */
+      }
+    };
+
+    await scanDirectory("/");
+
+    // Fallback: If readdir didn't return items, try ls("/")
+    if (list.length === 0) {
+      try {
+        const lsItems = (await (this.workspace as any).ls?.("/")) || [];
+        for (const item of lsItems) {
+          const itemPath = typeof item === "string" ? item : item.path || item.name;
+          if (itemPath) {
+            const clean = itemPath.startsWith("/") ? itemPath : `/${itemPath}`;
+            let size = 0;
+            try {
+              const st = await (this.workspace as any).stat?.(clean);
+              size = st?.size || 0;
+            } catch {
+              /* ignore stat error */
+            }
+            list.push({
+              path: clean,
+              name: clean.split("/").pop() || clean,
+              size,
+              isDirectory: false,
+            });
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+
+    return { files: list };
+  }
+
+  @callable()
+  async getWorkspaceFile(path: string): Promise<{ ok: boolean; content?: string; error?: string }> {
+    try {
+      const cleanPath = path.startsWith("/") ? path : `/${path}`;
+      const raw = await (this.workspace as any).readFile?.(cleanPath, { encoding: "utf8" });
+      const content = typeof raw === "string" ? raw : raw instanceof Uint8Array ? new TextDecoder().decode(raw) : String(raw || "");
+      return { ok: true, content };
+    } catch (err: any) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  @callable()
+  async getWorkspaceZipArchive(): Promise<{ ok: boolean; files: Array<{ path: string; content: string }> }> {
+    const { files: fileList } = await this.getWorkspaceFiles();
+    const result: Array<{ path: string; content: string }> = [];
+    for (const file of fileList) {
+      if (!file.isDirectory) {
+        const res = await this.getWorkspaceFile(file.path);
+        if (res.ok && res.content !== undefined) {
+          result.push({ path: file.path.replace(/^\/+/, ""), content: res.content });
+        }
+      }
+    }
+    return { ok: true, files: result };
   }
 }

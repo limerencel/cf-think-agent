@@ -263,6 +263,46 @@ export default {
       }
     }
 
+    // Workspace File Explorer & Code Preview REST API (backed by Assistant DO SQLite VFS)
+    // GET /api/workspace/files?convoId=xyz          -> { ok: true, files: [...] }
+    // GET /api/workspace/file?convoId=xyz&path=abc  -> { ok: true, content: "..." }
+    // GET /api/workspace/archive?convoId=xyz       -> { ok: true, files: [...] }
+    if (url.pathname.startsWith("/api/workspace")) {
+      const convoId = url.searchParams.get("convoId");
+      if (!convoId) {
+        return Response.json({ ok: false, error: "Missing convoId parameter" }, { status: 400 });
+      }
+      const stub = env.Assistant.get(env.Assistant.idFromName(convoId));
+
+      if (url.pathname === "/api/workspace/files" && request.method === "GET") {
+        try {
+          const res = await stub.getWorkspaceFiles();
+          return Response.json({ ok: true, files: res.files });
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === "/api/workspace/file" && request.method === "GET") {
+        const filePath = url.searchParams.get("path") || "";
+        try {
+          const res = await stub.getWorkspaceFile(filePath);
+          return Response.json(res);
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === "/api/workspace/archive" && request.method === "GET") {
+        try {
+          const res = await stub.getWorkspaceZipArchive();
+          return Response.json(res);
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
+      }
+    }
+
     // App Settings REST API (backed by ConvoIndex DO SQLite)
     // GET  /api/settings?key=xyz -> { ok: true, key, value }
     // POST /api/settings        -> { key, value } -> { ok: true }

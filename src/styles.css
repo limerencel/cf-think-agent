@@ -2161,3 +2161,481 @@ article.from-agent { max-width: 100%; }
   color: var(--accent-hover);
   margin-left: 4px;
 }
+
+/* ==========================================================================
+   3-Column Coding Agent Workspace & File Explorer Styles
+   ========================================================================== */
+
+.app-main-container {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.chat-viewport {
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Chat Sticky/Top Bar */
+.chat-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.chat-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-topbar-model {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--panel);
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-workspace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chat-workspace-btn:hover {
+  color: var(--ink);
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.chat-workspace-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.chat-workspace-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #FFFFFF;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+/* Header & Sidebar Workspace Toggle Buttons */
+.btn-workspace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-workspace-toggle:hover {
+  background: var(--panel-2);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.btn-workspace-toggle.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.btn-workspace-toggle .workspace-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #FFFFFF;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.side-rail-workspace.active {
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+}
+
+/* Workspace Right Panel (The 3rd Column) */
+.workspace-panel {
+  width: 520px;
+  max-width: 48vw;
+  min-width: 360px;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  z-index: 20;
+  flex-shrink: 0;
+  box-shadow: -2px 0 16px rgba(0, 0, 0, 0.04);
+  animation: slide-left 0.2s ease;
+}
+
+@keyframes slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 899.98px) {
+  .workspace-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 90vw;
+    max-width: 420px;
+    z-index: 45;
+    box-shadow: -6px 0 28px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Workspace Header */
+.workspace-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workspace-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.workspace-count-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-zip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #FFFFFF;
+  border: 0;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.workspace-zip-btn:hover {
+  background: var(--accent-hover);
+}
+
+.workspace-zip-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.workspace-search input {
+  width: 100%;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  outline: none;
+}
+
+.workspace-search input:focus {
+  border-color: var(--accent);
+}
+
+/* Workspace Body */
+.workspace-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Empty State */
+.workspace-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.workspace-empty-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--panel-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.workspace-empty h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--font-display);
+}
+
+.workspace-empty p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.workspace-empty-hint {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+}
+
+/* Workspace Content (File Tabs + Code Preview) */
+.workspace-content {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-file-list {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.workspace-file-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.workspace-file-tab:hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.workspace-file-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+
+.file-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.file-tab-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tab-size {
+  font-size: 10.5px;
+  opacity: 0.6;
+}
+
+/* Workspace Preview Area */
+.workspace-preview {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.workspace-preview-path {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.workspace-file-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.workspace-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preview-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.preview-action-btn:hover {
+  color: var(--ink);
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.workspace-code-container {
+  flex: 1 1 auto;
+  overflow: auto;
+  background: var(--code-bg);
+}
+
+.workspace-code-view .codeblock {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.workspace-code-view .codeblock-head {
+  display: none;
+}
+
+.workspace-file-loading {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-family: var(--font-ui);
+}

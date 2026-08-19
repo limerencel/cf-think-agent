@@ -1,4 +1,4 @@
-import { Component, Suspense, type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
+import { Component, Suspense, type ReactElement, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart } from "ai";
@@ -418,7 +418,44 @@ function newId(): string {
   return "c" + Math.random().toString(36).slice(2, 10);
 }
 
-/* ---------------- icons ---------------- */
+function FolderIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function FileCodeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <path d="m10 13-2 2 2 2" />
+      <path d="m14 17 2-2-2-2" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+function ArchiveIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="21 8 21 21 3 21 3 8" />
+      <rect x="1" y="3" width="22" height="5" />
+      <line x1="10" y1="12" x2="14" y2="12" />
+    </svg>
+  );
+}
 
 function BrainIcon() {
   return (
@@ -701,12 +738,16 @@ function ToolBits({ message }: { message: UIMessage }) {
   return (
     <div className="tools">
       {tools.map((part, i) => {
-        const name = getToolName(part);
+        const rawName = getToolName(part);
         const state = "state" in part ? (part.state as string) : "";
         const cls = state === "output-available" ? "ok" : state === "output-error" ? "err" : "run";
+        let display = rawName.replace(/^gbrain_/, "gbrain · ");
+        if (["read", "write", "edit", "ls", "rm", "mkdir", "stat"].includes(rawName)) {
+          display = `workspace · ${rawName}`;
+        }
         return (
-          <span key={`${name}-${i}`} className={`chip ${cls}`}>
-            {name.replace(/^gbrain_/, "gbrain · ")}
+          <span key={`${rawName}-${i}`} className={`chip ${cls}`}>
+            {display}
           </span>
         );
       })}
@@ -873,6 +914,462 @@ function Markdown({ text }: { text: string }) {
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/* ---------------- Workspace File Explorer & Previewer ---------------- */
+
+export interface WorkspaceFileItem {
+  path: string;
+  name: string;
+  size: number;
+  mtime?: number;
+  isDirectory: boolean;
+}
+
+function createZipBlob(files: Array<{ path: string; content: string }>): Blob {
+  const encoder = new TextEncoder();
+  const fileRecords: Array<{
+    nameBytes: Uint8Array;
+    contentBytes: Uint8Array;
+    crc32: number;
+    offset: number;
+  }> = [];
+
+  const crcTable = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    crcTable[i] = c;
+  }
+  const calcCrc32 = (bytes: Uint8Array): number => {
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+
+  const parts: Uint8Array[] = [];
+  let currentOffset = 0;
+
+  for (const f of files) {
+    const cleanPath = f.path.replace(/^\/+/, "");
+    const nameBytes = encoder.encode(cleanPath);
+    const contentBytes = encoder.encode(f.content);
+    const crc = calcCrc32(contentBytes);
+    const size = contentBytes.length;
+
+    const header = new Uint8Array(30 + nameBytes.length);
+    const view = new DataView(header.buffer);
+    view.setUint32(0, 0x04034b50, true);
+    view.setUint16(4, 20, true);
+    view.setUint16(6, 0, true);
+    view.setUint16(8, 0, true);
+    view.setUint16(10, 0, true);
+    view.setUint16(12, 0, true);
+    view.setUint32(14, crc, true);
+    view.setUint32(18, size, true);
+    view.setUint32(22, size, true);
+    view.setUint16(26, nameBytes.length, true);
+    view.setUint16(28, 0, true);
+    header.set(nameBytes, 30);
+
+    fileRecords.push({
+      nameBytes,
+      contentBytes,
+      crc32: crc,
+      offset: currentOffset,
+    });
+
+    parts.push(header);
+    parts.push(contentBytes);
+    currentOffset += header.length + contentBytes.length;
+  }
+
+  const cdOffset = currentOffset;
+  let cdSize = 0;
+
+  for (const rec of fileRecords) {
+    const cdHeader = new Uint8Array(46 + rec.nameBytes.length);
+    const view = new DataView(cdHeader.buffer);
+    view.setUint32(0, 0x02014b50, true);
+    view.setUint16(4, 20, true);
+    view.setUint16(6, 20, true);
+    view.setUint16(8, 0, true);
+    view.setUint16(10, 0, true);
+    view.setUint16(12, 0, true);
+    view.setUint16(14, 0, true);
+    view.setUint32(16, rec.crc32, true);
+    view.setUint32(20, rec.contentBytes.length, true);
+    view.setUint32(24, rec.contentBytes.length, true);
+    view.setUint16(28, rec.nameBytes.length, true);
+    view.setUint16(30, 0, true);
+    view.setUint16(32, 0, true);
+    view.setUint16(34, 0, true);
+    view.setUint16(36, 0, true);
+    view.setUint32(38, 0, true);
+    view.setUint32(42, rec.offset, true);
+    cdHeader.set(rec.nameBytes, 46);
+
+    parts.push(cdHeader);
+    cdSize += cdHeader.length;
+  }
+
+  const eocd = new Uint8Array(22);
+  const eocdView = new DataView(eocd.buffer);
+  eocdView.setUint32(0, 0x06054b50, true);
+  eocdView.setUint16(4, 0, true);
+  eocdView.setUint16(6, 0, true);
+  eocdView.setUint16(8, fileRecords.length, true);
+  eocdView.setUint16(10, fileRecords.length, true);
+  eocdView.setUint32(12, cdSize, true);
+  eocdView.setUint32(16, cdOffset, true);
+  eocdView.setUint16(20, 0, true);
+
+  parts.push(eocd);
+  return new Blob(parts as BlobPart[], { type: "application/zip" });
+}
+
+function getFileLanguage(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    py: "python",
+    json: "json",
+    html: "html",
+    css: "css",
+    md: "markdown",
+    sql: "sql",
+    sh: "bash",
+    yaml: "yaml",
+    yml: "yaml",
+    toml: "toml",
+    rs: "rust",
+    go: "go",
+  };
+  return map[ext] || "text";
+}
+
+function getFileExtBadge(fileName: string): { label: string; color: string } {
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  switch (ext) {
+    case "ts":
+    case "tsx":
+      return { label: "TS", color: "#3178C6" };
+    case "js":
+    case "jsx":
+      return { label: "JS", color: "#E5A00D" };
+    case "py":
+      return { label: "PY", color: "#3776AB" };
+    case "json":
+      return { label: "JSON", color: "#E08A6C" };
+    case "md":
+      return { label: "MD", color: "#8E44AD" };
+    case "html":
+      return { label: "HTML", color: "#E34F26" };
+    case "css":
+      return { label: "CSS", color: "#1572B6" };
+    case "sql":
+      return { label: "SQL", color: "#336791" };
+    case "sh":
+      return { label: "SH", color: "#4EAA25" };
+    default:
+      return { label: ext.toUpperCase().slice(0, 4) || "FILE", color: "var(--muted)" };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function WorkspacePanel({
+  convoId,
+  isOpen,
+  onClose,
+  onFileCountUpdate,
+  refreshToken,
+}: {
+  convoId: string;
+  isOpen: boolean;
+  onClose: () => void;
+  onFileCountUpdate?: (count: number) => void;
+  refreshToken?: number;
+}) {
+  const [files, setFiles] = useState<WorkspaceFileItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const refreshFiles = useCallback(async (autoSelect = false) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/workspace/files?convoId=${encodeURIComponent(convoId)}`);
+      const data = (await res.json()) as { ok: boolean; files?: WorkspaceFileItem[]; error?: string };
+      if (data.ok && data.files) {
+        const fileOnlyList = data.files.filter((f) => !f.isDirectory);
+        setFiles(fileOnlyList);
+        onFileCountUpdate?.(fileOnlyList.length);
+        if (autoSelect || !selectedPath || !fileOnlyList.some((f) => f.path === selectedPath)) {
+          if (fileOnlyList.length > 0) {
+            setSelectedPath(fileOnlyList[0].path);
+          } else {
+            setSelectedPath(null);
+            setFileContent(null);
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }, [convoId, selectedPath, onFileCountUpdate]);
+
+  useEffect(() => {
+    if (convoId) {
+      refreshFiles(true);
+    }
+  }, [convoId, refreshToken]);
+
+  useEffect(() => {
+    if (!selectedPath) {
+      setFileContent(null);
+      return;
+    }
+    let cancelled = false;
+    setFileLoading(true);
+    fetch(`/api/workspace/file?convoId=${encodeURIComponent(convoId)}&path=${encodeURIComponent(selectedPath)}`)
+      .then((res) => res.json())
+      .then((data: any) => {
+        if (!cancelled && data.ok && data.content !== undefined) {
+          setFileContent(data.content);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setFileLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [convoId, selectedPath]);
+
+  const handleDownloadZip = async () => {
+    setDownloadingZip(true);
+    try {
+      const res = await fetch(`/api/workspace/archive?convoId=${encodeURIComponent(convoId)}`);
+      const data = (await res.json()) as { ok: boolean; files?: Array<{ path: string; content: string }> };
+      if (data.ok && data.files && data.files.length > 0) {
+        const blob = createZipBlob(data.files);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `workspace-${convoId}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      alert("Failed to export workspace zip: " + String(err));
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  const handleDownloadSingle = () => {
+    if (!selectedPath || fileContent === null) return;
+    const blob = new Blob([fileContent], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = selectedPath.split("/").pop() || "file.txt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopyContent = async () => {
+    if (fileContent === null) return;
+    try {
+      await navigator.clipboard.writeText(fileContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  if (!isOpen) return null;
+
+  const filteredFiles = files.filter(
+    (f) => !searchQuery || f.path.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const selectedFile = files.find((f) => f.path === selectedPath);
+  const lang = selectedFile ? getFileLanguage(selectedFile.name) : "text";
+
+  return (
+    <aside className="workspace-panel">
+      {/* Workspace Panel Header */}
+      <div className="workspace-header">
+        <div className="workspace-title-row">
+          <div className="workspace-title">
+            <FolderIcon />
+            <span>Workspace</span>
+            <span className="workspace-count-badge">{files.length}</span>
+          </div>
+          <div className="workspace-actions">
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={() => refreshFiles(false)}
+              disabled={loading}
+              title="Refresh workspace files"
+              aria-label="Refresh"
+            >
+              <RefreshIcon />
+            </button>
+            {files.length > 0 && (
+              <button
+                type="button"
+                className="workspace-zip-btn"
+                onClick={handleDownloadZip}
+                disabled={downloadingZip}
+                title="Download all files as .zip archive"
+              >
+                <DownloadIcon />
+                <span>{downloadingZip ? "Archiving…" : "ZIP"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="ghost icon-btn"
+              onClick={onClose}
+              title="Close workspace panel"
+              aria-label="Close workspace"
+            >
+              <XIcon />
+            </button>
+          </div>
+        </div>
+
+        {/* Search input if more than 3 files */}
+        {files.length > 3 && (
+          <div className="workspace-search">
+            <input
+              type="text"
+              placeholder="Filter files…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Main Workspace Body */}
+      <div className="workspace-body">
+        {files.length === 0 ? (
+          <div className="workspace-empty">
+            <div className="workspace-empty-icon">
+              <FolderIcon />
+            </div>
+            <h3>Workspace is empty</h3>
+            <p>
+              Files created by the agent in this session will appear here in real-time.
+            </p>
+            <div className="workspace-empty-hint">
+              💡 <em>Try asking: "Write a script in workspace to fetch..."</em>
+            </div>
+          </div>
+        ) : (
+          <div className="workspace-content">
+            {/* File List Strip */}
+            <div className="workspace-file-list">
+              {filteredFiles.map((f) => {
+                const badge = getFileExtBadge(f.name);
+                const isSelected = f.path === selectedPath;
+                return (
+                  <button
+                    key={f.path}
+                    type="button"
+                    className={`workspace-file-tab ${isSelected ? "active" : ""}`}
+                    onClick={() => setSelectedPath(f.path)}
+                    title={f.path}
+                  >
+                    <span className="file-badge" style={{ color: badge.color }}>
+                      {badge.label}
+                    </span>
+                    <span className="file-tab-name">{f.name}</span>
+                    <span className="file-tab-size">{formatBytes(f.size)}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* File Preview Area */}
+            <div className="workspace-preview">
+              {selectedFile && (
+                <div className="workspace-preview-header">
+                  <div className="workspace-preview-path" title={selectedFile.path}>
+                    <FileCodeIcon />
+                    <span>{selectedFile.path}</span>
+                    <span className="workspace-file-meta">{formatBytes(selectedFile.size)}</span>
+                  </div>
+                  <div className="workspace-preview-actions">
+                    <button
+                      type="button"
+                      className="preview-action-btn"
+                      onClick={handleCopyContent}
+                      title="Copy file content"
+                    >
+                      {copied ? <CheckIcon /> : <CopyIcon />}
+                      <span>{copied ? "Copied" : "Copy"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="preview-action-btn"
+                      onClick={handleDownloadSingle}
+                      title="Download file"
+                    >
+                      <DownloadIcon />
+                      <span>Download</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="workspace-code-container">
+                {fileLoading ? (
+                  <div className="workspace-file-loading">Loading file…</div>
+                ) : fileContent === null ? (
+                  <div className="workspace-file-loading">Select a file to preview</div>
+                ) : (
+                  <div className="workspace-code-view">
+                    <Markdown text={`\`\`\`${lang}\n${fileContent}\n\`\`\``} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -2778,7 +3275,7 @@ function ChatErrorCard({
         <div className="raw-log-wrap">
           <pre className="raw-log-content">{logPayload}</pre>
         </div>
-      </details>
+</details>
     </div>
   );
 }
@@ -2796,6 +3293,10 @@ function Chat({
   mcpServers,
   customSystemPrompt,
   systemPromptMode,
+  workspaceOpen,
+  onToggleWorkspace,
+  workspaceFileCount = 0,
+  onTriggerWorkspaceRefresh,
 }: {
   convoId: string;
   onFirstMessage: (text: string) => void;
@@ -2807,6 +3308,10 @@ function Chat({
   mcpServers: McpServerConfig[];
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
+  workspaceOpen?: boolean;
+  onToggleWorkspace?: () => void;
+  workspaceFileCount?: number;
+  onTriggerWorkspaceRefresh?: () => void;
 }) {
   const agent = useAgent({ agent: "Assistant", name: convoId });
   const [dismissedError, setDismissedError] = useState<string | null>(null);
@@ -2833,6 +3338,15 @@ function Chat({
           : undefined,
     }),
   });
+
+  // Automatically refresh workspace files when agent finishes a turn
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (prevStatusRef.current === "streaming" && status === "ready") {
+      onTriggerWorkspaceRefresh?.();
+    }
+    prevStatusRef.current = status;
+  }, [status, onTriggerWorkspaceRefresh]);
 
   const [draft, setDraft] = useState("");
   const busy = status === "submitted" || status === "streaming";
@@ -2870,6 +3384,31 @@ function Chat({
 
   return (
     <div className={empty ? "page home" : "page chat"}>
+      {/* Subtle Chat Topbar with Quick Workspace Toggle */}
+      {!empty && (
+        <div className="chat-topbar">
+          <div className="chat-topbar-left">
+            <span className="chat-topbar-model">
+              {activeProvider.selectedModel || activeProvider.name}
+            </span>
+          </div>
+          <div className="chat-topbar-right">
+            <button
+              type="button"
+              className={`chat-workspace-btn ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
+              onClick={onToggleWorkspace}
+              title="Toggle Workspace File Explorer & Previewer"
+            >
+              <FolderIcon />
+              <span>Workspace</span>
+              {workspaceFileCount > 0 && (
+                <span className="chat-workspace-badge">{workspaceFileCount}</span>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
       {empty ? (
         <div className="home-inner">
           <h1>{greeting()}, Aki</h1>
@@ -3007,182 +3546,141 @@ function AppInner() {
     () => loadLocalSystemPrompt().mode
   );
 
+  // Settings Modal State
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const activeProvider = providers.find((p) => p.id === activeProviderId) ?? providers[0] ?? DEFAULT_PRESET;
+  // 3-Column Coding Agent Workspace State
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceFileCount, setWorkspaceFileCount] = useState(0);
+  const [workspaceRefreshToken, setWorkspaceRefreshToken] = useState(0);
 
-  // Sync Theme attribute
+  const cycleTheme = () => {
+    const next: ThemeMode = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
+    setTheme(next);
+  };
+
   useEffect(() => {
     saveLocalTheme(theme);
     if (theme === "system") {
-      document.documentElement.removeAttribute("data-theme");
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
     } else {
       document.documentElement.setAttribute("data-theme", theme);
     }
   }, [theme]);
 
-  // Sidebar Quick Theme Toggle (cycles System -> Dark -> Light)
-  const cycleTheme = () => {
-    setTheme((prev) => {
-      if (prev === "system") return "dark";
-      if (prev === "dark") return "light";
-      return "system";
-    });
-  };
-
-  const handleSelectActiveProvider = (id: string) => {
-    setActiveProviderId(id);
-    saveActiveProviderId(id);
-    cloudSetActiveProvider(id).catch(() => {});
-  };
-
-  const handleSaveProviders = (newProviders: ProviderConfig[], newActiveId?: string) => {
-    setProviders(newProviders);
-    saveLocalProviders(newProviders);
-    if (newActiveId) {
-      setActiveProviderId(newActiveId);
-      saveActiveProviderId(newActiveId);
-    }
-    // Cloud sync
-    cloudSaveAllProviders(newProviders).catch(() => {});
-    if (newActiveId) {
-      cloudSetActiveProvider(newActiveId).catch(() => {});
-    }
-  };
-
-  const handleSaveMcpServers = (newServers: McpServerConfig[]) => {
-    setMcpServers(newServers);
-    saveLocalMcpServers(newServers);
-    cloudSaveAllMcpServers(newServers).catch(() => {});
-  };
-
-  const handleUpdateProviderReasoningEffort = (effort: "none" | "low" | "medium" | "high") => {
-    const val = effort === "none" ? undefined : effort;
-    const updated = providers.map((p) =>
-      p.id === activeProviderId ? { ...p, reasoningEffort: val } : p
-    );
-    handleSaveProviders(updated);
-  };
-
-  const handleSaveSystemPrompt = (newPrompt: string, newMode: "append" | "override") => {
-    setCustomSystemPrompt(newPrompt);
-    setSystemPromptMode(newMode);
-    saveLocalSystemPrompt(newPrompt, newMode);
-    cloudSetSetting("custom_system_prompt", newPrompt).catch(() => {});
-    cloudSetSetting("system_prompt_mode", newMode).catch(() => {});
-  };
-
-  const closeSideOnMobile = () => {
-    if (typeof window !== "undefined" && !window.matchMedia("(min-width: 900px)").matches) {
-      setSideOpen(false);
-    }
-  };
-
-  // On mount: pull cloud list for convos, providers, MCP servers, and settings
+  // Sync settings and cloud data
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      // 1. Convos sync
-      try {
-        const cloud = await cloudListConvs();
-        if (cancelled) return;
-        const local = loadLocalConvs();
-        const seen = new Set(cloud.map((c) => c.id));
-        const orphans = local.filter((c) => !seen.has(c.id));
-        const merged = [...cloud, ...orphans]
-          .sort((a, b) => b.ts - a.ts)
-          .slice(0, 30);
-        setConvos(merged);
-        saveLocalConvs(merged);
-        setCloudReady(true);
-        if (merged.length > 0) {
-          const localIds = new Set(local.map((c) => c.id));
-          if (!localIds.has(active) && !merged.some((c) => c.id === active)) {
-            setActive(merged[0].id);
-          }
+
+    cloudListConvs()
+      .then((cloudList) => {
+        if (!cancelled && cloudList.length) {
+          applyCloud(cloudList);
         }
-        for (const o of orphans) {
-          try {
-            await cloudTouchConvs(o.id, o.title);
-          } catch {
-            /* best effort */
-          }
-        }
-      } catch {
+      })
+      .catch(() => {})
+      .finally(() => {
         if (!cancelled) setCloudReady(true);
-      }
+      });
 
-      // 2. Providers cloud sync
-      try {
-        const cloudProvidersRes = await cloudListProviders();
-        if (cancelled) return;
-        const localProviders = loadLocalProviders();
-        const cloudList = cloudProvidersRes.providers || [];
-        const cloudIds = new Set(cloudList.map((p) => p.id));
-        const localUnsynced = localProviders.filter((p) => p.id !== "cf-default" && !cloudIds.has(p.id));
-
-        if (localUnsynced.length > 0) {
-          // Push local offline additions up to Cloudflare
-          const merged = [...cloudList, ...localUnsynced];
-          setProviders(merged);
-          saveLocalProviders(merged);
-          await cloudSaveAllProviders(merged);
-        } else if (cloudList.length > 0) {
-          setProviders(cloudList);
-          saveLocalProviders(cloudList);
-        }
-
-        if (cloudProvidersRes.activeId && (cloudList.some((p) => p.id === cloudProvidersRes.activeId) || cloudProvidersRes.activeId === "cf-default")) {
-          setActiveProviderId(cloudProvidersRes.activeId);
-          saveActiveProviderId(cloudProvidersRes.activeId);
-        }
-      } catch {
-        /* best effort */
-      }
-
-      // 3. MCP servers cloud sync
-      try {
-        const cloudMcpRes = await cloudListMcpServers();
-        if (cancelled) return;
-        const localMcp = loadLocalMcpServers();
-        const cloudList = cloudMcpRes || [];
-        const cloudIds = new Set(cloudList.map((s) => s.id));
-        const localUnsynced = localMcp.filter((s) => s.id !== "gbrain-default" && !cloudIds.has(s.id));
-
-        if (localUnsynced.length > 0) {
-          const merged = [...cloudList, ...localUnsynced];
-          setMcpServers(merged);
-          saveLocalMcpServers(merged);
-          await cloudSaveAllMcpServers(merged);
-        } else if (cloudList.length > 0) {
-          setMcpServers(cloudList);
-          saveLocalMcpServers(cloudList);
-        }
-      } catch {
-        /* best effort */
-      }
-
-      // 4. Custom system prompt cloud sync
-      try {
-        const cloudPrompt = await cloudGetSetting("custom_system_prompt");
-        const cloudMode = (await cloudGetSetting("system_prompt_mode")) as "append" | "override" | null;
-        if (!cancelled) {
-          if (cloudPrompt !== null) {
-            setCustomSystemPrompt(cloudPrompt);
-            saveLocalSystemPrompt(cloudPrompt, cloudMode || "append");
-          }
-          if (cloudMode) {
-            setSystemPromptMode(cloudMode);
+    cloudListProviders()
+      .then((cloudProvidersRes) => {
+        const cloudProviders = cloudProvidersRes.providers || [];
+        if (!cancelled && cloudProviders.length) {
+          setProviders(cloudProviders);
+          saveLocalProviders(cloudProviders);
+          const activeItem = cloudProviders.find((p) => p.isDefault) || cloudProviders[0];
+          if (activeItem) {
+            setActiveProviderId(activeItem.id);
+            saveActiveProviderId(activeItem.id);
           }
         }
-      } catch {
-        /* best effort */
-      }
-    })();
+      })
+      .catch(() => {});
+
+    cloudListMcpServers()
+      .then((servers) => {
+        if (!cancelled && servers.length) {
+          setMcpServers(servers);
+          saveLocalMcpServers(servers);
+        }
+      })
+      .catch(() => {});
+
+    cloudGetSetting("custom_system_prompt")
+      .then((promptVal) => {
+        if (!cancelled && promptVal) {
+          setCustomSystemPrompt(promptVal);
+          saveLocalSystemPrompt(promptVal, systemPromptMode);
+        }
+      })
+      .catch(() => {});
+
+    cloudGetSetting("system_prompt_mode")
+      .then((modeVal) => {
+        if (!cancelled && (modeVal === "append" || modeVal === "override")) {
+          setSystemPromptMode(modeVal);
+          saveLocalSystemPrompt(customSystemPrompt, modeVal);
+        }
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const activeProvider =
+    providers.find((p) => p.id === activeProviderId) || providers[0] || DEFAULT_PRESET;
+
+  const handleSelectActiveProvider = (id: string) => {
+    setActiveProviderId(id);
+    saveActiveProviderId(id);
+    setProviders((prev) => {
+      const next = prev.map((p) => ({ ...p, isDefault: p.id === id }));
+      saveLocalProviders(next);
+      return next;
+    });
+  };
+
+  const handleUpdateProviderReasoningEffort = (effort: "none" | "low" | "medium" | "high") => {
+    setProviders((prev) => {
+      const next = prev.map((p) => (p.id === activeProviderId ? { ...p, reasoningEffort: effort } : p));
+      saveLocalProviders(next);
+      const target = next.find((p) => p.id === activeProviderId);
+      if (target) {
+        cloudSaveProvider(target).catch(() => {});
+      }
+      return next;
+    });
+  };
+
+  const handleSaveProviders = (nextProviders: ProviderConfig[], newActiveId?: string) => {
+    setProviders(nextProviders);
+    if (newActiveId) {
+      setActiveProviderId(newActiveId);
+      saveActiveProviderId(newActiveId);
+    }
+    saveLocalProviders(nextProviders);
+  };
+
+  const handleSaveMcpServers = async (nextServers: McpServerConfig[]) => {
+    setMcpServers(nextServers);
+    saveLocalMcpServers(nextServers);
+  };
+
+  const handleSaveSystemPrompt = async (prompt: string, mode: "append" | "override") => {
+    setCustomSystemPrompt(prompt);
+    setSystemPromptMode(mode);
+    saveLocalSystemPrompt(prompt, mode);
+    await cloudSetSetting("custom_system_prompt", prompt);
+    await cloudSetSetting("system_prompt_mode", mode);
+  };
+
+  const closeSideOnMobile = () => {
+    if (window.innerWidth < 900) setSideOpen(false);
+  };
 
   useEffect(() => {
     saveLocalConvs(convos);
@@ -3228,7 +3726,7 @@ function AppInner() {
   };
 
   return (
-    <div className={"shell" + (sideOpen ? " side-open" : "")}>
+    <div className={"shell" + (sideOpen ? " side-open" : "") + (workspaceOpen ? " with-workspace" : "")}>
       <header className="app-header">
         <div className="header-left">
           <button
@@ -3243,6 +3741,17 @@ function AppInner() {
           <span className="header-wordmark">edge agent</span>
         </div>
         <div className="header-right">
+          <button
+            type="button"
+            className={`btn-workspace-toggle ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
+            onClick={() => setWorkspaceOpen((prev) => !prev)}
+            aria-label="Toggle Workspace"
+            title="Toggle Workspace File Explorer"
+          >
+            <FolderIcon />
+            <span>Workspace</span>
+            {workspaceFileCount > 0 && <span className="workspace-badge">{workspaceFileCount}</span>}
+          </button>
           <button
             type="button"
             className="btn-new-chat-header"
@@ -3277,6 +3786,15 @@ function AppInner() {
               title="New conversation"
             >
               <PlusIcon />
+            </button>
+            <button
+              type="button"
+              className={`ghost side-rail-workspace ${workspaceOpen ? "active" : ""} ${workspaceFileCount > 0 ? "has-files" : ""}`}
+              onClick={() => setWorkspaceOpen((prev) => !prev)}
+              aria-label="Toggle Workspace"
+              title={`Workspace Files (${workspaceFileCount})`}
+            >
+              <FolderIcon />
             </button>
           </div>
           <div className="side-rail-bottom">
@@ -3371,29 +3889,46 @@ function AppInner() {
 
       {sideOpen && <div className="tap-away" onClick={() => setSideOpen(false)} />}
 
-      <Suspense
-        fallback={
-          <div className="page home">
-            <div className="home-inner">
-              <h1>Connecting…</h1>
-            </div>
-          </div>
-        }
-      >
-        <Chat
-          key={active}
+      {/* Main 3-Column Layout: Chat Center + Workspace Right */}
+      <div className="app-main-container">
+        <div className="chat-viewport">
+          <Suspense
+            fallback={
+              <div className="page home">
+                <div className="home-inner">
+                  <h1>Connecting…</h1>
+                </div>
+              </div>
+            }
+          >
+            <Chat
+              key={active}
+              convoId={active}
+              onFirstMessage={(text) => touch(active, text.slice(0, 48))}
+              activeProvider={activeProvider}
+              providers={providers}
+              onSelectProvider={handleSelectActiveProvider}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
+              mcpServers={mcpServers}
+              customSystemPrompt={customSystemPrompt}
+              systemPromptMode={systemPromptMode}
+              workspaceOpen={workspaceOpen}
+              onToggleWorkspace={() => setWorkspaceOpen((prev) => !prev)}
+              workspaceFileCount={workspaceFileCount}
+              onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
+            />
+          </Suspense>
+        </div>
+
+        <WorkspacePanel
           convoId={active}
-          onFirstMessage={(text) => touch(active, text.slice(0, 48))}
-          activeProvider={activeProvider}
-          providers={providers}
-          onSelectProvider={handleSelectActiveProvider}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
-          mcpServers={mcpServers}
-          customSystemPrompt={customSystemPrompt}
-          systemPromptMode={systemPromptMode}
+          isOpen={workspaceOpen}
+          onClose={() => setWorkspaceOpen(false)}
+          onFileCountUpdate={(count) => setWorkspaceFileCount(count)}
+          refreshToken={workspaceRefreshToken}
         />
-      </Suspense>
+      </div>
 
       <SettingsModal
         isOpen={settingsOpen}

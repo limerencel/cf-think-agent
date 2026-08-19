@@ -52,15 +52,21 @@ Production Domain: [https://think.itsuhiro.com](https://think.itsuhiro.com) (Pro
 
 ---
 
-### 2. Cloudflare Virtual File System (VFS)
+### 2. Cloudflare Virtual File System (VFS) & 3-Column Coding Workspace
 
 - **Engine**: `@cloudflare/computer` SQLite VFS on Durable Object storage.
+- **Interactive 3-Column Coding UI**:
+  - **Left Column**: Synced conversation index and quick session manager.
+  - **Center Column**: AI Chat stream with live Chain of Thought reasoning, token-efficient tool call tracking, and model switching.
+  - **Right Column (Workspace Explorer)**: Real-time file tabs, syntax-highlighted code viewer, file size metrics, single-file download, and **one-click ZIP archive export**.
 - **Capabilities**:
   - Exposes standard file operations to the agent: `read`, `write`, `edit`, `ls`, `rm`, `mkdir`, `stat`.
   - **Sub-millisecond Edge Persistence**: Files created by the agent persist across page reloads and browser sessions within that specific conversation.
-  - **Clean Separation from Long-term Memory**:
-    - **Cloudflare VFS**: Session-scoped workspace for code artifacts, data tables, and working drafts.
-    - **GBrain MCP**: Global personal knowledge base for infrastructure facts, credentials, and persistent documents.
+- **Clean 4-Layer Memory & Context Separation**:
+  - **Hindsight**: External live dynamic memory (active preferences, ongoing context, evolving thoughts).
+  - **GBrain MCP**: Digital library & static archive (structured server facts, topology, permanent reference docs).
+  - **Cloudflare Computer Workspace (VFS)**: Session-scoped coding workspace for files, data tables, and working drafts.
+  - **Parallel Web Search MCP**: Real-time live web search and URL content extraction for unfamiliar or breaking topics.
 
 ---
 
