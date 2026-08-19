@@ -6,6 +6,9 @@ import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import type { McpServerConfig, McpToolDef, McpAuthType } from "./mcp-types";
+
+export type { McpServerConfig, McpToolDef, McpAuthType };
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -40,6 +43,7 @@ export interface ProviderConfig {
   selectedModel: string;
   cachedModels: string[];
   isDefault?: boolean;
+  useResponseApi?: boolean;
   temperature?: number;
   maxTokens?: number;
   topP?: number;
@@ -53,12 +57,31 @@ const DEFAULT_PRESET: ProviderConfig = {
   selectedModel: "deepseek-v4-flash",
   cachedModels: ["deepseek-v4-flash"],
   isDefault: true,
+  useResponseApi: false,
+};
+
+const DEFAULT_MCP_PRESET: McpServerConfig = {
+  id: "gbrain-default",
+  name: "GBrain Personal Knowledge (Built-in)",
+  endpoint: "https://gbrain-mcp.itsuhiro.com/mcp",
+  authType: "bearer",
+  bearerToken: "",
+  enabled: true,
+  isPreset: true,
+  cachedTools: [
+    { name: "get_health", description: "GBrain health: page counts, embed coverage, brain score." },
+    { name: "query", description: "Ask GBrain a natural-language question over stored knowledge." },
+    { name: "search", description: "Keyword / semantic search over GBrain pages. Returns slugs and snippets." },
+    { name: "get_page", description: "Read one GBrain page by slug." },
+    { name: "put_page", description: "Write or update a GBrain page." },
+  ],
 };
 
 const LS_KEY = "edgeagent.conversations";
 const LS_THEME_KEY = "edgeagent.theme";
 const LS_PROVIDERS_KEY = "edgeagent.providers";
 const LS_ACTIVE_PROVIDER_KEY = "edgeagent.active_provider_id";
+const LS_MCP_KEY = "edgeagent.mcp_servers";
 
 function loadLocalTheme(): ThemeMode {
   try {
@@ -243,11 +266,200 @@ async function cloudSetActiveProvider(id: string): Promise<void> {
   if (!res.ok) throw new Error(`cloud set active provider ${res.status}`);
 }
 
+/* ---------------- MCP Servers Cloud API helpers ---------------- */
+
+function loadLocalMcpServers(): McpServerConfig[] {
+  try {
+    const raw = localStorage.getItem(LS_MCP_KEY);
+    if (raw) {
+      const list = JSON.parse(raw) as McpServerConfig[];
+      if (!list.some((s) => s.id === "gbrain-default")) {
+        return [DEFAULT_MCP_PRESET, ...list];
+      }
+      return list;
+    }
+    return [DEFAULT_MCP_PRESET];
+  } catch {
+    return [DEFAULT_MCP_PRESET];
+  }
+}
+
+function saveLocalMcpServers(servers: McpServerConfig[]): void {
+  try {
+    localStorage.setItem(LS_MCP_KEY, JSON.stringify(servers));
+  } catch {
+    /* ignore */
+  }
+}
+
+const LOCAL_STORAGE_PROMPT_KEY = "think_custom_system_prompt";
+const LOCAL_STORAGE_PROMPT_MODE_KEY = "think_system_prompt_mode";
+
+function loadLocalSystemPrompt(): { prompt: string; mode: "append" | "override" } {
+  if (typeof window === "undefined") return { prompt: "", mode: "append" };
+  try {
+    const prompt = localStorage.getItem(LOCAL_STORAGE_PROMPT_KEY) || "";
+    const mode = (localStorage.getItem(LOCAL_STORAGE_PROMPT_MODE_KEY) as "append" | "override") || "append";
+    return { prompt, mode };
+  } catch {
+    return { prompt: "", mode: "append" };
+  }
+}
+
+function saveLocalSystemPrompt(prompt: string, mode: "append" | "override") {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LOCAL_STORAGE_PROMPT_KEY, prompt);
+    localStorage.setItem(LOCAL_STORAGE_PROMPT_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function cloudGetSetting(key: string): Promise<string | null> {
+  const res = await fetch(`/api/settings?key=${encodeURIComponent(key)}`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as any;
+  return data?.value ?? null;
+}
+
+async function cloudSetSetting(key: string, value: string): Promise<void> {
+  await fetch("/api/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+}
+
+async function cloudListMcpServers(): Promise<McpServerConfig[]> {
+  const res = await fetch("/api/mcp/list", { headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`cloud list mcp ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; servers: McpServerConfig[] };
+  if (!data.ok) throw new Error("cloud list mcp !ok");
+  return data.servers || [];
+}
+
+async function cloudSaveMcpServer(server: McpServerConfig): Promise<McpServerConfig[]> {
+  const res = await fetch("/api/mcp/save", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ server }),
+  });
+  if (!res.ok) throw new Error(`cloud save mcp ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; servers: McpServerConfig[] };
+  if (!data.ok) throw new Error("cloud save mcp !ok");
+  return data.servers;
+}
+
+async function cloudSaveAllMcpServers(servers: McpServerConfig[]): Promise<McpServerConfig[]> {
+  const res = await fetch("/api/mcp/save", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ servers }),
+  });
+  if (!res.ok) throw new Error(`cloud save all mcp ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; servers: McpServerConfig[] };
+  if (!data.ok) throw new Error("cloud save all mcp !ok");
+  return data.servers;
+}
+
+async function cloudRemoveMcpServer(id: string): Promise<McpServerConfig[]> {
+  const res = await fetch("/api/mcp/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error(`cloud remove mcp ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; servers: McpServerConfig[] };
+  if (!data.ok) throw new Error("cloud remove mcp !ok");
+  return data.servers;
+}
+
+async function cloudFetchMcpTools(
+  endpoint: string,
+  authType: McpAuthType,
+  bearerToken?: string,
+  oauthTokens?: any,
+  serverId?: string
+): Promise<McpToolDef[]> {
+  const res = await fetch("/api/mcp/fetch-tools", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ endpoint, authType, bearerToken, oauthTokens, serverId }),
+  });
+  const data = (await res.json()) as { ok: boolean; tools?: McpToolDef[]; error?: string };
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data.tools || [];
+}
+
+async function cloudStartMcpOAuth(
+  endpoint: string,
+  serverId?: string,
+  serverName?: string,
+  clientId?: string,
+  clientSecret?: string
+): Promise<{ ok: boolean; authUrl: string; serverId: string; state: string; discovery: any }> {
+  const res = await fetch("/api/mcp/oauth/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ endpoint, serverId, serverName, clientId, clientSecret }),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 function newId(): string {
   return "c" + Math.random().toString(36).slice(2, 10);
 }
 
 /* ---------------- icons ---------------- */
+
+function TerminalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 2l-2 2m-1.5 1.5L14 9l-1.5-1.5L11 9l-1.5-1.5L8 9a5 5 0 1 0 7 7l5.5-5.5a2.12 2.12 0 0 0 0-3L21 2z" />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path
+        d="M3 4h10M6 4V2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5V4M12.5 4v9a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 13V4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function PlusIcon() {
   return (
@@ -276,6 +488,37 @@ function XIcon() {
   return (
     <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
       <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+    </svg>
+  );
+}
+
+function AlertTriangleIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path
+        d="M10 2.5L1.8 16.5a1 1 0 0 0 .86 1.5h14.68a1 1 0 0 0 .86-1.5L10 2.5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M10 8v4M10 14.5v.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9L13.5 5.5M13.5 2v3.5h-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -638,6 +881,7 @@ function ProviderEditor({
   const [selectedModel, setSelectedModel] = useState(provider.selectedModel);
   const [cachedModels, setCachedModels] = useState<string[]>(provider.cachedModels || []);
   const [isDefault, setIsDefault] = useState(!!provider.isDefault);
+  const [useResponseApi, setUseResponseApi] = useState(!!provider.useResponseApi);
   const [showApiKey, setShowApiKey] = useState(false);
 
   // Advanced parameters
@@ -707,6 +951,7 @@ function ProviderEditor({
       selectedModel: selectedModel.trim(),
       cachedModels: cachedModels.length > 0 ? cachedModels : [selectedModel.trim()],
       isDefault,
+      useResponseApi,
       temperature,
       maxTokens,
       topP,
@@ -751,7 +996,8 @@ function ProviderEditor({
             <span className="info-card-desc">
               Base URL: <code>{endpoint || "Loaded from wrangler.jsonc (AIG_BASE_URL)"}</code><br />
               API Key: <code>Stored in Cloudflare Secret (OPENCODE_GO_API_KEY)</code><br />
-              Default Model: <code>{selectedModel}</code> (MODEL_ID in wrangler.jsonc)
+              Default Model: <code>{selectedModel}</code> (MODEL_ID in wrangler.jsonc)<br />
+              Protocol: <code>OpenAI Chat Completions (/chat/completions)</code>
             </span>
           </div>
         </div>
@@ -760,7 +1006,7 @@ function ProviderEditor({
           <div className="form-group">
             <label className="form-label">
               AI Endpoint (Base URL)
-              <span className="form-hint">OpenAI Compatible</span>
+              <span className="form-hint">e.g. <code>https://api.deepseek.com/v1</code> or <code>https://openrouter.ai/api/v1</code>. No trailing <code>/chat/completions</code> needed.</span>
             </label>
             <input
               type="text"
@@ -778,6 +1024,23 @@ function ProviderEditor({
               onChange={(e) => setEndpoint(e.target.value)}
               required
             />
+          </div>
+
+          <div className="protocol-select-box">
+            <label className="checkbox-label" style={{ alignItems: "flex-start", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={useResponseApi}
+                onChange={(e) => setUseResponseApi(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <div className="checkbox-text-group">
+                <span className="checkbox-title">Use OpenAI Response Protocol (Beta /responses)</span>
+                <span className="checkbox-desc">
+                  Enable only if this provider/model explicitly supports OpenAI's /responses protocol. Unchecked by default (uses standard /v1/chat/completions, fully compatible with DeepSeek, Ollama, OpenRouter, and standard OpenAI-compatible endpoints).
+                </span>
+              </div>
+            </label>
           </div>
 
           <div className="form-group">
@@ -956,6 +1219,550 @@ function ProviderEditor({
   );
 }
 
+/* ---------------- MCP Server Editor ---------------- */
+function McpServerEditor({
+  server,
+  isNew,
+  onSave,
+  onCancel,
+  onDelete,
+  onOAuthCompleted,
+}: {
+  server: McpServerConfig;
+  isNew?: boolean;
+  onSave: (updated: McpServerConfig) => void;
+  onCancel: () => void;
+  onDelete?: () => void;
+  onOAuthCompleted?: () => void;
+}) {
+  const [name, setName] = useState(server.name);
+  const [endpoint, setEndpoint] = useState(server.endpoint);
+  const [authType, setAuthType] = useState<McpAuthType>(server.authType || "none");
+  const [bearerToken, setBearerToken] = useState(server.bearerToken || "");
+  const [oauthClientId, setOauthClientId] = useState(server.oauthClientId || "");
+  const [oauthClientSecret, setOauthClientSecret] = useState(server.oauthClientSecret || "");
+  const [oauthTokens, setOauthTokens] = useState(server.oauthTokens);
+  const [showToken, setShowToken] = useState(false);
+  const [showAdvancedOAuth, setShowAdvancedOAuth] = useState(false);
+  const [enabled, setEnabled] = useState(server.enabled ?? true);
+  const [cachedTools, setCachedTools] = useState<McpToolDef[]>(server.cachedTools || []);
+  const [loadingTools, setLoadingTools] = useState(false);
+  const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const isPreset = server.id === "gbrain-default";
+
+  useEffect(() => {
+    const handleMessage = async (e: MessageEvent) => {
+      if (e.data?.type === "MCP_OAUTH_SUCCESS") {
+        setIsAuthorizing(false);
+        setStatusMsg({
+          type: "ok",
+          text: e.data?.message || "OAuth 2.0 connected and tools discovered successfully!",
+        });
+        if (onOAuthCompleted) onOAuthCompleted();
+      } else if (e.data?.type === "MCP_OAUTH_ERROR") {
+        setIsAuthorizing(false);
+        setStatusMsg({
+          type: "err",
+          text: `OAuth authorization failed: ${e.data?.message || "Unknown error"}`,
+        });
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [onOAuthCompleted]);
+
+  const handleStartOAuth = async () => {
+    if (!endpoint.trim()) {
+      setStatusMsg({ type: "err", text: "Endpoint URL is required before starting OAuth." });
+      return;
+    }
+    setIsAuthorizing(true);
+    setStatusMsg(null);
+    try {
+      const data = await cloudStartMcpOAuth(
+        endpoint.trim(),
+        server.id,
+        name.trim() || "MCP Server",
+        oauthClientId.trim() || undefined,
+        oauthClientSecret.trim() || undefined
+      );
+
+      const w = 580;
+      const h = 720;
+      const left = Math.max(0, (window.screen.width - w) / 2);
+      const top = Math.max(0, (window.screen.height - h) / 2);
+      const popup = window.open(
+        data.authUrl,
+        "mcp_oauth_window",
+        `width=${w},height=${h},top=${top},left=${left},scrollbars=yes,status=no`
+      );
+      if (!popup || popup.closed) {
+        window.location.href = data.authUrl;
+      }
+    } catch (err: any) {
+      setIsAuthorizing(false);
+      setStatusMsg({ type: "err", text: `Failed to initiate OAuth: ${err.message || String(err)}` });
+    }
+  };
+
+  const handleFetchTools = async () => {
+    if (!endpoint.trim()) {
+      setStatusMsg({ type: "err", text: "Endpoint URL is required." });
+      return;
+    }
+    setLoadingTools(true);
+    setStatusMsg(null);
+    try {
+      const tools = await cloudFetchMcpTools(
+        endpoint.trim(),
+        authType,
+        bearerToken.trim() || undefined,
+        oauthTokens,
+        server.id
+      );
+      setCachedTools(tools);
+      setStatusMsg({
+        type: "ok",
+        text: `Successfully discovered ${tools.length} tool${tools.length === 1 ? "" : "s"}.`,
+      });
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: `Failed to connect: ${err.message || String(err)}` });
+    } finally {
+      setLoadingTools(false);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setStatusMsg({ type: "err", text: "Server Name is required." });
+      return;
+    }
+    if (!endpoint.trim()) {
+      setStatusMsg({ type: "err", text: "Endpoint URL is required." });
+      return;
+    }
+
+    const updated: McpServerConfig = {
+      ...server,
+      name: name.trim(),
+      endpoint: endpoint.trim(),
+      authType,
+      bearerToken: bearerToken.trim(),
+      oauthClientId: oauthClientId.trim() || undefined,
+      oauthClientSecret: oauthClientSecret.trim() || undefined,
+      oauthTokens,
+      enabled,
+      cachedTools,
+      isPreset,
+      updatedAt: Date.now(),
+    };
+    onSave(updated);
+  };
+
+  return (
+    <form className="form-grid" onSubmit={handleSubmit} autoComplete="off">
+      <div className="form-group">
+        <label className="form-label">
+          MCP Server Name
+          <span className="form-hint">e.g. Weather Service, GitHub MCP, Inkstone</span>
+        </label>
+        <input
+          type="text"
+          className="text-input"
+          placeholder="Server Display Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">
+          MCP Endpoint URL
+          <span className="form-hint">Streamable HTTP / SSE JSON-RPC endpoint</span>
+        </label>
+        <input
+          type="text"
+          className="text-input"
+          placeholder="https://example.com/mcp"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          required
+          disabled={isPreset}
+        />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">
+          Authentication Method
+          <span className="form-hint">Select how the Agent authenticates with this MCP server</span>
+        </label>
+        <div className="segmented-nav" style={{ width: "100%", justifyContent: "space-between" }}>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "none" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("none")}
+            disabled={isPreset}
+          >
+            No Auth
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "bearer" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("bearer")}
+            disabled={isPreset}
+          >
+            Bearer Token
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("oauth")}
+            disabled={isPreset}
+          >
+            OAuth 2.0
+          </button>
+        </div>
+      </div>
+
+      {authType === "bearer" && !isPreset && (
+        <div className="form-group">
+          <label className="form-label">
+            Bearer Token / API Key
+            <span className="form-hint">Included in Authorization: Bearer header</span>
+          </label>
+          <div className="input-row">
+            <input
+              type="text"
+              className={showToken ? "text-input" : "text-input key-masked"}
+              placeholder="sk-... or token"
+              value={bearerToken}
+              onChange={(e) => setBearerToken(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => setShowToken(!showToken)}
+              title={showToken ? "Hide token" : "Show token"}
+            >
+              {showToken ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {authType === "oauth" && !isPreset && (
+        <div className="protocol-select-box" style={{ marginTop: 2, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <KeyIcon />
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
+                OAuth 2.0 PKCE Handshake
+              </span>
+            </div>
+            {oauthTokens?.accessToken ? (
+              <span className="badge badge-connected">Connected (Token Active)</span>
+            ) : (
+              <span className="badge badge-auth">Not Authorized</span>
+            )}
+          </div>
+          <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 10px", lineHeight: 1.45 }}>
+            Automated discovery with PKCE and dynamic token refresh. Click below to authorize in a secure popup window.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn-primary btn-sm"
+              onClick={handleStartOAuth}
+              disabled={isAuthorizing || !endpoint.trim()}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              {isAuthorizing ? <span className="spinner" /> : <ExternalLinkIcon />}
+              <span>{isAuthorizing ? "Connecting OAuth…" : oauthTokens?.accessToken ? "Reconnect OAuth" : "Connect with OAuth"}</span>
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setShowAdvancedOAuth(!showAdvancedOAuth)}
+            >
+              {showAdvancedOAuth ? "Hide Advanced" : "Custom Client ID / Secret"}
+            </button>
+          </div>
+
+          {showAdvancedOAuth && (
+            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: 12 }}>
+                  Custom Client ID (Optional)
+                  <span className="form-hint">Leave blank for automatic registration</span>
+                </label>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="e.g. 8RlTsw82PWv8K32I"
+                  value={oauthClientId}
+                  onChange={(e) => setOauthClientId(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: 12 }}>
+                  Custom Client Secret (Optional)
+                </label>
+                <input
+                  type="password"
+                  className="text-input"
+                  placeholder="Optional for confidential clients"
+                  value={oauthClientSecret}
+                  onChange={(e) => setOauthClientSecret(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Discovered Tools Preview */}
+      <div className="form-group">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <label className="form-label" style={{ margin: 0 }}>
+            Discovered Tools ({cachedTools.length})
+          </label>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={handleFetchTools}
+            disabled={loadingTools || !endpoint.trim()}
+          >
+            {loadingTools ? <span className="spinner" /> : <SparklesIcon />}
+            {loadingTools ? "Connecting…" : "Probe / Refresh Tools"}
+          </button>
+        </div>
+
+        {cachedTools.length === 0 ? (
+          <p className="side-empty" style={{ margin: 0, padding: "8px 0" }}>
+            No tools discovered yet. Click "Probe / Refresh Tools" or connect via OAuth to fetch exposed tools.
+          </p>
+        ) : (
+          <div className="mcp-tools-list">
+            {cachedTools.map((t) => (
+              <div key={t.name} className="mcp-tool-badge-item">
+                <span className="mcp-tool-tag">{t.name}</span>
+                {t.description && <span className="mcp-tool-desc">{t.description}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="input-row" style={{ justifyContent: "space-between", marginTop: 4 }}>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          Enable this MCP server
+        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          {onDelete && !isPreset && (
+            <button type="button" className="btn-text-del" onClick={onDelete}>
+              <TrashIcon />
+              <span>Delete</span>
+            </button>
+          )}
+          <button type="button" className="btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary">
+            {isNew ? "Add MCP Server" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+
+      {statusMsg && (
+        <div className={`banner-msg ${statusMsg.type}`}>
+          {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
+          <span>{statusMsg.text}</span>
+        </div>
+      )}
+    </form>
+  );
+}
+
+/* ---------------- System Prompt Editor ---------------- */
+
+const DEFAULT_SYSTEM_PROMPT = `You are Aki's Cloudflare edge agent.
+Reply in the user's language (Chinese if they write Chinese).
+You have two systems:
+1) Cloudflare Computer workspace — durable files in this Durable Object.
+2) GBrain — Aki's personal knowledge base (query / search / get_page / put_page / recall / get_health).
+Prefer GBrain for anything Aki already stored (infra, people, decisions, workflows).
+Prefer workspace tools for notes you create in this session.
+Prefer read/ls/write/edit over bash cat/ls/sed.
+Keep replies concise. Cite GBrain slugs when you use them.
+Do not invent holdings, keys, or infra facts — look them up.`;
+
+const PROMPT_PRESETS = [
+  {
+    name: "Concise Expert",
+    prompt: "Provide direct, high-signal responses. Minimize conversational filler. Always use markdown formatting and code blocks with syntax highlighting.",
+  },
+  {
+    name: "Coding Architect",
+    prompt: "You are a principal software engineer. Always analyze edge cases, performance implications, and verify code integrity before answering. Prefer modern TypeScript and clean architectural patterns.",
+  },
+  {
+    name: "Bilingual Explainer",
+    prompt: "Always respond in natural, professional Traditional/Simplified Chinese with clear technical terms explained where appropriate. Maintain clear structured headings.",
+  },
+  {
+    name: "Research Analyst",
+    prompt: "Structure answers with Executive Summary, Deep Dive, Key Findings, and Actionable Next Steps. Cite relevant sources and knowledge entries.",
+  },
+];
+
+function SystemPromptEditor({
+  initialPrompt,
+  initialMode,
+  onSave,
+}: {
+  initialPrompt: string;
+  initialMode: "append" | "override";
+  onSave: (prompt: string, mode: "append" | "override") => void;
+}) {
+  const [prompt, setPrompt] = useState(initialPrompt);
+  const [mode, setMode] = useState<"append" | "override">(initialMode);
+  const [showDefault, setShowDefault] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const handleApplyPreset = (text: string) => {
+    setPrompt((prev) => (prev.trim() ? `${prev}\n\n${text}` : text));
+  };
+
+  const handleSave = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    onSave(prompt.trim(), mode);
+    setStatusMsg({ type: "ok", text: "System prompt saved and synced successfully!" });
+    setTimeout(() => setStatusMsg(null), 3000);
+  };
+
+  const handleReset = () => {
+    setPrompt("");
+    setMode("append");
+    onSave("", "append");
+    setStatusMsg({ type: "ok", text: "Reset to default system prompt." });
+    setTimeout(() => setStatusMsg(null), 3000);
+  };
+
+  return (
+    <form className="form-grid" onSubmit={handleSave}>
+      <div className="modal-section-head" style={{ marginBottom: 4 }}>
+        <h3 className="modal-section-title">Custom System Prompt & Persona</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="btn-secondary btn-sm" onClick={handleReset}>
+            Reset to Default
+          </button>
+          <button type="submit" className="btn-primary btn-sm">
+            Save Prompt
+          </button>
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">
+          Prompt Execution Mode
+          <span className="form-hint">Choose how custom instructions interact with built-in agent rules</span>
+        </label>
+        <div className="segmented-nav" style={{ width: "100%" }}>
+          <button
+            type="button"
+            className={`tab-btn ${mode === "append" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setMode("append")}
+          >
+            Append to Default (Recommended)
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${mode === "override" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setMode("override")}
+          >
+            Override Default Completely
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>
+          {mode === "append"
+            ? "Your instructions will be added to the base prompt, preserving VFS file workspace and GBrain MCP knowledge retrieval tools."
+            : "Replaces the entire base prompt. Workspace tools remain available, but core system guidelines will be overwritten."}
+        </p>
+      </div>
+
+      <div className="form-group">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <label className="form-label" style={{ margin: 0 }}>
+            Custom Instructions / Persona
+          </label>
+          <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+            {prompt.length} chars · {prompt.trim() ? prompt.trim().split(/\s+/).length : 0} words
+          </span>
+        </div>
+        <textarea
+          className="prompt-textarea"
+          placeholder="Enter custom instructions, tone of voice, formatting guidelines, or roleplay personas... (e.g. Always format responses in clean tables...)"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+        <div className="prompt-templates-bar">
+          <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 500 }}>Quick Templates:</span>
+          {PROMPT_PRESETS.map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              className="prompt-template-chip"
+              onClick={() => handleApplyPreset(p.prompt)}
+              title={p.prompt}
+            >
+              + {p.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Built-in Default Prompt Inspector */}
+      <div className="form-group" style={{ marginTop: 4 }}>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          style={{ width: "fit-content", display: "inline-flex", alignItems: "center", gap: 6 }}
+          onClick={() => setShowDefault(!showDefault)}
+        >
+          {showDefault ? <ChevronDownIcon /> : <ChevronRightIcon />}
+          <span>{showDefault ? "Hide Default System Prompt" : "Inspect Built-in Default System Prompt"}</span>
+        </button>
+        {showDefault && (
+          <div className="prompt-default-viewer" style={{ marginTop: 8 }}>
+            {DEFAULT_SYSTEM_PROMPT}
+          </div>
+        )}
+      </div>
+
+      {statusMsg && (
+        <div className={`banner-msg ${statusMsg.type}`}>
+          {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
+          <span>{statusMsg.text}</span>
+        </div>
+      )}
+    </form>
+  );
+}
+
 /* ---------------- Modular Tabbed Settings Modal ---------------- */
 
 function SettingsModal({
@@ -967,6 +1774,11 @@ function SettingsModal({
   activeProviderId,
   onSaveProviders,
   onSelectActiveProvider,
+  mcpServers,
+  onSaveMcpServers,
+  customSystemPrompt,
+  systemPromptMode,
+  onSaveSystemPrompt,
   convosCount,
 }: {
   isOpen: boolean;
@@ -977,11 +1789,19 @@ function SettingsModal({
   activeProviderId: string;
   onSaveProviders: (providers: ProviderConfig[], newActiveId?: string) => void;
   onSelectActiveProvider: (id: string) => void;
+  mcpServers: McpServerConfig[];
+  onSaveMcpServers: (servers: McpServerConfig[]) => void;
+  customSystemPrompt: string;
+  systemPromptMode: "append" | "override";
+  onSaveSystemPrompt: (prompt: string, mode: "append" | "override") => void;
   convosCount: number;
 }) {
-  const [activeTab, setActiveTab] = useState<"general" | "models" | "tools" | "about">("models");
+  const [activeTab, setActiveTab] = useState<"general" | "models" | "prompt" | "tools" | "about">("models");
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
+  const [expandedMcpId, setExpandedMcpId] = useState<string | null>(null);
+  const [isAddingMcp, setIsAddingMcp] = useState(false);
+  const [refreshingMcpId, setRefreshingMcpId] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -1017,9 +1837,63 @@ function SettingsModal({
     onSaveProviders(updated);
   };
 
+  const handleSaveMcpServer = (updatedServer: McpServerConfig, isNew?: boolean) => {
+    let updated = [...mcpServers];
+    if (isNew) {
+      updated.push(updatedServer);
+      onSaveMcpServers(updated);
+      setIsAddingMcp(false);
+    } else {
+      updated = updated.map((s) => (s.id === updatedServer.id ? updatedServer : s));
+      onSaveMcpServers(updated);
+      setExpandedMcpId(null);
+    }
+  };
+
+  const handleDeleteMcpServer = (id: string) => {
+    if (id === "gbrain-default") return;
+    const updated = mcpServers.filter((s) => s.id !== id);
+    onSaveMcpServers(updated);
+  };
+
+  const handleToggleMcpServer = (id: string) => {
+    const updated = mcpServers.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s));
+    onSaveMcpServers(updated);
+  };
+
+  const handleOAuthSuccess = async () => {
+    try {
+      const refreshed = await cloudListMcpServers();
+      onSaveMcpServers(refreshed);
+      setIsAddingMcp(false);
+      setExpandedMcpId(null);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleRefreshMcpTools = async (server: McpServerConfig) => {
+    setRefreshingMcpId(server.id);
+    try {
+      const tools = await cloudFetchMcpTools(
+        server.endpoint,
+        server.authType,
+        server.bearerToken,
+        server.oauthTokens,
+        server.id
+      );
+      const updated = mcpServers.map((s) => (s.id === server.id ? { ...s, cachedTools: tools } : s));
+      onSaveMcpServers(updated);
+    } catch {
+      /* ignore */
+    } finally {
+      setRefreshingMcpId(null);
+    }
+  };
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop">
+      <div className="modal-card">
         <div className="modal-head">
           <h2 className="modal-title">Settings</h2>
           <button type="button" className="ghost" onClick={onClose} aria-label="Close modal">
@@ -1049,11 +1923,21 @@ function SettingsModal({
             </button>
             <button
               type="button"
+              className={`tab-btn ${activeTab === "prompt" ? "active" : ""}`}
+              onClick={() => setActiveTab("prompt")}
+            >
+              <TerminalIcon />
+              <span>Prompt</span>
+              {customSystemPrompt?.trim() && <span className="tab-count">Custom</span>}
+            </button>
+            <button
+              type="button"
               className={`tab-btn ${activeTab === "tools" ? "active" : ""}`}
               onClick={() => setActiveTab("tools")}
             >
               <CpuIcon />
               <span>Tools & MCP</span>
+              <span className="tab-count">{mcpServers.length}</span>
             </button>
             <button
               type="button"
@@ -1130,7 +2014,7 @@ function SettingsModal({
                   <div className="info-card-content">
                     <span className="info-card-title">Cloudflare Durable Objects SQLite</span>
                     <span className="info-card-desc">
-                      Conversations ({convosCount}) and AI Providers ({providers.length}) are securely stored in Cloudflare edge SQLite. Synced across all your devices automatically.
+                      Conversations ({convosCount}), AI Providers ({providers.length}), and MCP Servers ({mcpServers.length}) are securely stored in Cloudflare edge SQLite. Synced across all your devices automatically.
                     </span>
                   </div>
                 </div>
@@ -1260,62 +2144,173 @@ function SettingsModal({
             </>
           )}
 
-          {/* TAB 3: TOOLS & MCP */}
+          {/* TAB 3: SYSTEM PROMPT */}
+          {activeTab === "prompt" && (
+            <SystemPromptEditor
+              initialPrompt={customSystemPrompt}
+              initialMode={systemPromptMode}
+              onSave={onSaveSystemPrompt}
+            />
+          )}
+
+          {/* TAB 4: TOOLS & MCP */}
           {activeTab === "tools" && (
-            <div className="modal-section">
-              <h3 className="modal-section-title">Integrated MCP Servers & Tools</h3>
-              <p className="modal-section-desc">Active tools and protocols available to your Cloudflare Think Agent.</p>
+            <>
+              <div className="modal-section-head">
+                <h3 className="modal-section-title">Connected MCP Servers ({mcpServers.length})</h3>
+                {!isAddingMcp && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => setIsAddingMcp(true)}
+                  >
+                    <PlusIcon />
+                    <span>Add MCP Server</span>
+                  </button>
+                )}
+              </div>
 
+              {/* Add New MCP Server Form */}
+              {isAddingMcp && (
+                <div className="provider-card active" style={{ padding: 16 }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600, color: "var(--ink)" }}>
+                    Add New MCP Server
+                  </h4>
+                  <McpServerEditor
+                    server={{
+                      id: "mcp-" + Math.random().toString(36).slice(2, 9),
+                      name: "",
+                      endpoint: "",
+                      authType: "none",
+                      bearerToken: "",
+                      enabled: true,
+                      cachedTools: [],
+                    }}
+                    isNew={true}
+                    onSave={(s) => handleSaveMcpServer(s, true)}
+                    onCancel={() => setIsAddingMcp(false)}
+                    onOAuthCompleted={handleOAuthSuccess}
+                  />
+                </div>
+              )}
+
+              {/* MCP Servers List */}
               <div className="providers-list">
-                <div className="provider-card">
-                  <div className="provider-card-head" style={{ cursor: "default" }}>
-                    <div className="provider-meta">
-                      <div className="provider-title-row">
-                        <span className="provider-name">Parallel Web Search MCP</span>
-                        <span className="badge badge-connected">Connected</span>
+                {mcpServers.map((s) => {
+                  const isExpanded = expandedMcpId === s.id;
+                  const isRefreshing = refreshingMcpId === s.id;
+
+                  return (
+                    <div key={s.id} className={`provider-card ${s.enabled ? "" : "disabled-card"}`}>
+                      <div
+                        className="provider-card-head"
+                        onClick={() => setExpandedMcpId(isExpanded ? null : s.id)}
+                      >
+                        <div className="provider-meta">
+                          <div className="provider-title-row">
+                            <span className="provider-name">{s.name}</span>
+                            {s.enabled ? (
+                              <span className="badge badge-connected">Active</span>
+                            ) : (
+                              <span className="badge badge-disabled">Disabled</span>
+                            )}
+                            <span className="badge badge-auth">
+                              {s.authType === "oauth" ? "OAuth 2.0" : s.authType === "bearer" ? "Bearer" : "No Auth"}
+                            </span>
+                            <span className="badge badge-tools-count">
+                              {s.cachedTools.length} Tool{s.cachedTools.length === 1 ? "" : "s"}
+                            </span>
+                            {s.isPreset && <span className="badge badge-preset">Cloudflare Built-in</span>}
+                          </div>
+                          <span className="provider-desc">
+                            Endpoint: <code>{s.endpoint}</code>
+                          </span>
+                        </div>
+                        <div className="provider-actions" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            onClick={() => handleRefreshMcpTools(s)}
+                            title="Probe & Refresh Tools"
+                            disabled={isRefreshing}
+                          >
+                            {isRefreshing ? <span className="spinner" /> : <RefreshIcon />}
+                            <span>{isRefreshing ? "Probing…" : "Refresh"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            onClick={() => handleToggleMcpServer(s.id)}
+                          >
+                            {s.enabled ? "Disable" : "Enable"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            onClick={() => setExpandedMcpId(isExpanded ? null : s.id)}
+                          >
+                            {isExpanded ? "Collapse" : "Configure"}
+                          </button>
+                          {!s.isPreset && (
+                            <button
+                              type="button"
+                              className="btn-text-del"
+                              onClick={() => handleDeleteMcpServer(s.id)}
+                              title="Delete MCP server"
+                            >
+                              <TrashIcon />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span className="provider-desc">Real-time live web search and URL content extraction</span>
+
+                      {/* Expandable MCP Server Editor Panel */}
+                      {isExpanded && (
+                        <div className="provider-expand-body">
+                          <McpServerEditor
+                            server={s}
+                            onSave={(updated) => handleSaveMcpServer(updated, false)}
+                            onCancel={() => setExpandedMcpId(null)}
+                            onDelete={!s.isPreset ? () => handleDeleteMcpServer(s.id) : undefined}
+                            onOAuthCompleted={handleOAuthSuccess}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Built-in Edge Agent Capabilities */}
+              <div className="modal-section" style={{ marginTop: 16 }}>
+                <h4 className="modal-section-title">Built-in Edge Agent Capabilities</h4>
+                <div className="providers-list">
+                  <div className="provider-card">
+                    <div className="provider-card-head" style={{ cursor: "default" }}>
+                      <div className="provider-meta">
+                        <div className="provider-title-row">
+                          <span className="provider-name">Parallel Web Search MCP</span>
+                          <span className="badge badge-connected">Connected</span>
+                        </div>
+                        <span className="provider-desc">Real-time live web search and URL content extraction</span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="provider-card">
-                  <div className="provider-card-head" style={{ cursor: "default" }}>
-                    <div className="provider-meta">
-                      <div className="provider-title-row">
-                        <span className="provider-name">GBrain MCP Knowledge Base</span>
-                        <span className="badge badge-connected">Connected</span>
+                  <div className="provider-card">
+                    <div className="provider-card-head" style={{ cursor: "default" }}>
+                      <div className="provider-meta">
+                        <div className="provider-title-row">
+                          <span className="provider-name">Cloudflare Computer Workspace</span>
+                          <span className="badge badge-connected">Active</span>
+                        </div>
+                        <span className="provider-desc">Durable SQLite Virtual File System (read, write, edit, ls)</span>
                       </div>
-                      <span className="provider-desc">Personal knowledge retrieval, search, memory recall & page management</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="provider-card">
-                  <div className="provider-card-head" style={{ cursor: "default" }}>
-                    <div className="provider-meta">
-                      <div className="provider-title-row">
-                        <span className="provider-name">Cloudflare Computer Workspace</span>
-                        <span className="badge badge-connected">Active</span>
-                      </div>
-                      <span className="provider-desc">Durable SQLite Virtual File System (read, write, edit, ls)</span>
                     </div>
                   </div>
                 </div>
               </div>
-
-              <div className="info-card" style={{ marginTop: 8 }}>
-                <div className="info-card-icon">
-                  <CpuIcon />
-                </div>
-                <div className="info-card-content">
-                  <span className="info-card-title">Extensible MCP Infrastructure</span>
-                  <span className="info-card-desc">
-                    Support for custom user accounts, authentication tokens, and dynamic MCP server connections will be accessible in this section.
-                  </span>
-                </div>
-              </div>
-            </div>
+            </>
           )}
 
           {/* TAB 4: ABOUT */}
@@ -1453,6 +2448,162 @@ const HINTS = [
   "Look up my Schwab records",
 ];
 
+/* ---------------- Diagnostic Error Card ---------------- */
+
+function ChatErrorCard({
+  rawError,
+  activeProvider,
+  onRetry,
+  onDismiss,
+  onOpenSettings,
+}: {
+  rawError: string;
+  activeProvider: ProviderConfig;
+  onRetry?: () => void;
+  onDismiss: () => void;
+  onOpenSettings: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const errLower = rawError.toLowerCase();
+  let category = "LLM API Error";
+  let badge = "API Error";
+  let title = "Model Request Failed";
+  let explanation = "The upstream model service returned an unexpected response. Check your model settings or inspect the diagnostic log below.";
+
+  if (
+    errLower.includes("401") ||
+    errLower.includes("unauthorized") ||
+    errLower.includes("invalid_api_key") ||
+    errLower.includes("authentication")
+  ) {
+    category = "Authentication (401)";
+    badge = "Auth Failed";
+    title = "Authentication Failed";
+    explanation = `The API key for provider [${activeProvider.name}] is invalid or expired. Please update your key in Settings.`;
+  } else if (
+    errLower.includes("404") ||
+    errLower.includes("not found") ||
+    errLower.includes("responsesbatch") ||
+    errLower.includes("responses")
+  ) {
+    category = "Protocol / Endpoint Mismatch (404)";
+    badge = "404 Not Found";
+    title = "Endpoint Not Found / Protocol Mismatch";
+    explanation = activeProvider.useResponseApi
+      ? `OpenAI Response API is currently enabled, but the upstream endpoint (${activeProvider.endpoint || "AI Gateway"}) may only support standard /v1/chat/completions. Try unchecking "Use OpenAI Response Protocol" in Settings.`
+      : `Could not locate the model endpoint (${activeProvider.endpoint || "AI Gateway"}). Verify your Base URL format (e.g. /v1 suffix) and ensure model ID [${activeProvider.selectedModel}] is correct.`;
+  } else if (
+    errLower.includes("429") ||
+    errLower.includes("rate limit") ||
+    errLower.includes("quota") ||
+    errLower.includes("insufficient")
+  ) {
+    category = "Rate Limit / Quota (429)";
+    badge = "Rate Limited";
+    title = "Rate Limit or Quota Exceeded";
+    explanation = "The upstream provider returned rate limit (429) or insufficient quota. Please wait a moment or check your account balance.";
+  } else if (
+    errLower.includes("tool") ||
+    errLower.includes("function") ||
+    errLower.includes("schema")
+  ) {
+    category = "Tool Calling Incompatible";
+    badge = "Tools Unsupported";
+    title = "Model Incompatible with Tool Calling";
+    explanation = `Model [${activeProvider.selectedModel}] does not seem to support Function Calling / Tools required for GBrain and Workspace operations. Consider switching to DeepSeek-V3/R1, GPT-4o, or Claude 3.5.`;
+  } else if (
+    errLower.includes("websocket") ||
+    errLower.includes("connection") ||
+    errLower.includes("network")
+  ) {
+    category = "Network / WebSocket";
+    badge = "Disconnected";
+    title = "Edge Connection Interrupted";
+    explanation = "Realtime connection to the Cloudflare Agent was interrupted. Please check your network or refresh the page.";
+  }
+
+  const logPayload = JSON.stringify(
+    {
+      timestamp: new Date().toISOString(),
+      category,
+      provider: {
+        id: activeProvider.id,
+        name: activeProvider.name,
+        endpoint: activeProvider.endpoint || "(Worker Default)",
+        model: activeProvider.selectedModel,
+        protocol: activeProvider.useResponseApi ? "openai.responses (/responses)" : "openai.chat (/chat/completions)",
+      },
+      error: rawError,
+    },
+    null,
+    2
+  );
+
+  const handleCopy = () => {
+    try {
+      navigator.clipboard.writeText(logPayload);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <div className="chat-error-card">
+      <div className="chat-error-head">
+        <div className="chat-error-title-row">
+          <div className="chat-error-icon">
+            <AlertTriangleIcon />
+          </div>
+          <span className="chat-error-title">{title}</span>
+          <span className="chat-error-badge">{badge}</span>
+        </div>
+        <button type="button" className="chat-error-close" onClick={onDismiss} title="Dismiss">
+          <XIcon />
+        </button>
+      </div>
+
+      <p className="chat-error-desc">{explanation}</p>
+
+      <div className="chat-error-actions">
+        {onRetry && (
+          <button type="button" className="btn-error-action primary" onClick={onRetry}>
+            <RefreshIcon />
+            Retry
+          </button>
+        )}
+        <button type="button" className="btn-error-action" onClick={onOpenSettings}>
+          <SettingsIcon />
+          Configure Provider
+        </button>
+      </div>
+
+      <details className="chat-error-details">
+        <summary className="chat-error-summary">
+          <span>Diagnostic Log</span>
+          <button
+            type="button"
+            className="btn-copy-raw-log"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleCopy();
+            }}
+          >
+            {copied ? <CheckIcon /> : <CopyIcon />}
+            <span>{copied ? "Copied" : "Copy Log"}</span>
+          </button>
+        </summary>
+        <div className="raw-log-wrap">
+          <pre className="raw-log-content">{logPayload}</pre>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 /* ---------------- one conversation ---------------- */
 
 function Chat({
@@ -1462,6 +2613,9 @@ function Chat({
   providers,
   onSelectProvider,
   onOpenSettings,
+  mcpServers,
+  customSystemPrompt,
+  systemPromptMode,
 }: {
   convoId: string;
   onFirstMessage: (text: string) => void;
@@ -1469,18 +2623,27 @@ function Chat({
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
   onOpenSettings: () => void;
+  mcpServers: McpServerConfig[];
+  customSystemPrompt: string;
+  systemPromptMode: "append" | "override";
 }) {
   const agent = useAgent({ agent: "Assistant", name: convoId });
-  const { messages, sendMessage, status } = useAgentChat({
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
+
+  const { messages, sendMessage, status, error, regenerate, clearError, connectionError } = useAgentChat({
     agent,
     body: () => ({
       providerId: activeProvider.id,
+      mcpServers,
+      customSystemPrompt,
+      promptMode: systemPromptMode,
       customModel:
         activeProvider.id !== "cf-default" && activeProvider.endpoint && activeProvider.selectedModel
           ? {
               endpoint: activeProvider.endpoint,
               apiKey: activeProvider.apiKey,
               modelId: activeProvider.selectedModel,
+              useResponseApi: activeProvider.useResponseApi,
               temperature: activeProvider.temperature,
               maxTokens: activeProvider.maxTokens,
               topP: activeProvider.topP,
@@ -1488,20 +2651,39 @@ function Chat({
           : undefined,
     }),
   });
+
   const [draft, setDraft] = useState("");
   const busy = status === "submitted" || status === "streaming";
   const titled = useRef(false);
   const empty = messages.length === 0;
 
+  const activeErrorStr = connectionError
+    ? connectionError.message || `WebSocket Connection Error (${connectionError.code || "closed"})`
+    : error
+    ? error.message || String(error)
+    : null;
+
+  const hasError = !!activeErrorStr && dismissedError !== activeErrorStr;
+
   const submit = () => {
     const text = draft.trim();
     if (!text || busy) return;
+    setDismissedError(null);
+    clearError?.();
     if (!titled.current) {
       titled.current = true;
       onFirstMessage(text);
     }
     sendMessage({ text });
     setDraft("");
+  };
+
+  const handleRetry = () => {
+    setDismissedError(null);
+    clearError?.();
+    if (regenerate) {
+      regenerate();
+    }
   };
 
   return (
@@ -1554,6 +2736,18 @@ function Chat({
               </article>
             ))}
             {busy && <div className="thinking">Thinking…</div>}
+            {hasError && activeErrorStr && (
+              <ChatErrorCard
+                rawError={activeErrorStr}
+                activeProvider={activeProvider}
+                onRetry={handleRetry}
+                onDismiss={() => {
+                  setDismissedError(activeErrorStr);
+                  clearError?.();
+                }}
+                onOpenSettings={onOpenSettings}
+              />
+            )}
           </main>
           <Composer
             draft={draft}
@@ -1597,6 +2791,18 @@ function AppInner() {
   const [activeProviderId, setActiveProviderId] = useState<string>(() =>
     loadActiveProviderId(loadLocalProviders())
   );
+
+  // MCP Servers State (Local hot cache + Cloud DO source of truth)
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(loadLocalMcpServers);
+
+  // System Prompt State (Local hot cache + Cloud DO app_settings)
+  const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
+    () => loadLocalSystemPrompt().prompt
+  );
+  const [systemPromptMode, setSystemPromptMode] = useState<"append" | "override">(
+    () => loadLocalSystemPrompt().mode
+  );
+
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? providers[0] ?? DEFAULT_PRESET;
@@ -1640,13 +2846,27 @@ function AppInner() {
     }
   };
 
+  const handleSaveMcpServers = (newServers: McpServerConfig[]) => {
+    setMcpServers(newServers);
+    saveLocalMcpServers(newServers);
+    cloudSaveAllMcpServers(newServers).catch(() => {});
+  };
+
+  const handleSaveSystemPrompt = (newPrompt: string, newMode: "append" | "override") => {
+    setCustomSystemPrompt(newPrompt);
+    setSystemPromptMode(newMode);
+    saveLocalSystemPrompt(newPrompt, newMode);
+    cloudSetSetting("custom_system_prompt", newPrompt).catch(() => {});
+    cloudSetSetting("system_prompt_mode", newMode).catch(() => {});
+  };
+
   const closeSideOnMobile = () => {
     if (typeof window !== "undefined" && !window.matchMedia("(min-width: 900px)").matches) {
       setSideOpen(false);
     }
   };
 
-  // On mount: pull cloud list for both convos and providers
+  // On mount: pull cloud list for convos, providers, MCP servers, and settings
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1707,6 +2927,45 @@ function AppInner() {
       } catch {
         /* best effort */
       }
+
+      // 3. MCP servers cloud sync
+      try {
+        const cloudMcpRes = await cloudListMcpServers();
+        if (cancelled) return;
+        const localMcp = loadLocalMcpServers();
+        const cloudList = cloudMcpRes || [];
+        const cloudIds = new Set(cloudList.map((s) => s.id));
+        const localUnsynced = localMcp.filter((s) => s.id !== "gbrain-default" && !cloudIds.has(s.id));
+
+        if (localUnsynced.length > 0) {
+          const merged = [...cloudList, ...localUnsynced];
+          setMcpServers(merged);
+          saveLocalMcpServers(merged);
+          await cloudSaveAllMcpServers(merged);
+        } else if (cloudList.length > 0) {
+          setMcpServers(cloudList);
+          saveLocalMcpServers(cloudList);
+        }
+      } catch {
+        /* best effort */
+      }
+
+      // 4. Custom system prompt cloud sync
+      try {
+        const cloudPrompt = await cloudGetSetting("custom_system_prompt");
+        const cloudMode = (await cloudGetSetting("system_prompt_mode")) as "append" | "override" | null;
+        if (!cancelled) {
+          if (cloudPrompt !== null) {
+            setCustomSystemPrompt(cloudPrompt);
+            saveLocalSystemPrompt(cloudPrompt, cloudMode || "append");
+          }
+          if (cloudMode) {
+            setSystemPromptMode(cloudMode);
+          }
+        }
+      } catch {
+        /* best effort */
+      }
     })();
     return () => {
       cancelled = true;
@@ -1750,36 +3009,68 @@ function AppInner() {
   };
 
   const newChat = () => {
-    setActive(newId());
+    const id = newId();
+    touch(id, "New chat");
+    setActive(id);
     closeSideOnMobile();
   };
 
   return (
     <div className={"shell" + (sideOpen ? " side-open" : "")}>
-      {!sideOpen && (
-        <button
-          type="button"
-          className="ghost mobile-open"
-          onClick={() => setSideOpen(true)}
-          aria-label="Open sidebar"
-        >
-          <SideCollapseIcon />
-        </button>
-      )}
-      {!sideOpen && (
-        <div className="side-rail">
+      <header className="app-header">
+        <div className="header-left">
           <button
             type="button"
-            className="ghost side-expand"
+            className="ghost"
             onClick={() => setSideOpen(true)}
-            aria-label="Expand sidebar"
+            aria-label="Open sidebar"
+            title="Open sidebar"
           >
             <SideCollapseIcon />
           </button>
-          <div className="side-rail-bottom">
+          <span className="header-wordmark">edge agent</span>
+        </div>
+        <div className="header-right">
+          <button
+            type="button"
+            className="btn-new-chat-header"
+            onClick={newChat}
+            aria-label="New chat"
+            title="Start new chat"
+          >
+            <PlusIcon />
+            <span>New chat</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Desktop Collapsed Floating Rail */}
+      {!sideOpen && (
+        <div className="side-rail">
+          <div className="side-rail-top">
             <button
               type="button"
               className="ghost"
+              onClick={() => setSideOpen(true)}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+            >
+              <SideCollapseIcon />
+            </button>
+            <button
+              type="button"
+              className="ghost side-rail-new"
+              onClick={newChat}
+              aria-label="New chat"
+              title="New conversation"
+            >
+              <PlusIcon />
+            </button>
+          </div>
+          <div className="side-rail-bottom">
+            <button
+              type="button"
+              className="theme-quick-btn"
               onClick={cycleTheme}
               aria-label="Toggle Theme"
               title={`Current theme: ${theme} (Click to switch)`}
@@ -1798,6 +3089,7 @@ function AppInner() {
           </div>
         </div>
       )}
+
       <aside className={sideOpen ? "open" : ""}>
         <div className="side-top">
           <span className="wordmark">edge agent</span>
@@ -1884,6 +3176,9 @@ function AppInner() {
           providers={providers}
           onSelectProvider={handleSelectActiveProvider}
           onOpenSettings={() => setSettingsOpen(true)}
+          mcpServers={mcpServers}
+          customSystemPrompt={customSystemPrompt}
+          systemPromptMode={systemPromptMode}
         />
       </Suspense>
 
@@ -1896,6 +3191,11 @@ function AppInner() {
         activeProviderId={activeProviderId}
         onSaveProviders={handleSaveProviders}
         onSelectActiveProvider={handleSelectActiveProvider}
+        mcpServers={mcpServers}
+        onSaveMcpServers={handleSaveMcpServers}
+        customSystemPrompt={customSystemPrompt}
+        systemPromptMode={systemPromptMode}
+        onSaveSystemPrompt={handleSaveSystemPrompt}
         convosCount={convos.length}
       />
     </div>

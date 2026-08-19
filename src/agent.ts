@@ -17,11 +17,27 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { gbrainCall } from "./gbrain";
 
+import { mcpCallTool } from "./mcp-client";
+import type { McpServerConfig } from "./mcp-types";
+
+function cleanBaseUrl(raw: string): string {
+  let url = raw.trim();
+  // Strip trailing slashes
+  url = url.replace(/\/+$/, "");
+  // Strip trailing /chat/completions, /responses, or /models if pasted by user
+  url = url.replace(/\/(chat\/completions|responses|models)$/, "");
+  url = url.replace(/\/+$/, "");
+  return url;
+}
+
 export class Assistant extends Think<Env> {
   override maxSteps = 16;
 
   // Wait for MCP servers (Parallel search) to be connected before inference.
   override waitForMcpConnections = { timeout: 10_000 };
+
+  private currentCustomPrompt?: string;
+  private currentPromptMode: "append" | "override" = "append";
 
   override async onStart() {
     await super.onStart();
@@ -41,53 +57,95 @@ export class Assistant extends Think<Env> {
   override getModel() {
     const openai = createOpenAI({
       apiKey: this.env.OPENCODE_GO_API_KEY,
-      baseURL: this.env.AIG_BASE_URL,
+      baseURL: cleanBaseUrl(this.env.AIG_BASE_URL),
       headers: {
         // Tag every AI Gateway request as coming from the Think edge agent,
         // with the conversation id, so hermes-aig logs are filterable.
         "cf-aig-metadata": JSON.stringify({
           source: "think-edge-agent",
           convo: this.name,
+          protocol: "chat_completions",
         }),
       },
     });
-    return openai(this.env.MODEL_ID);
+    return openai.chat(this.env.MODEL_ID);
   }
 
   override beforeTurn(ctx: TurnContext): TurnConfig | void {
+    const customPrompt = ctx.body?.customSystemPrompt as string | undefined;
+    const promptMode = ctx.body?.promptMode as "append" | "override" | undefined;
+    this.currentCustomPrompt = customPrompt?.trim() || undefined;
+    this.currentPromptMode = promptMode || "append";
+
     const custom = ctx.body?.customModel as
       | {
           endpoint?: string;
           apiKey?: string;
           modelId?: string;
+          useResponseApi?: boolean;
           temperature?: number;
           maxTokens?: number;
           topP?: number;
         }
       | undefined;
 
+    let model: any = undefined;
+
     if (custom?.endpoint && custom?.modelId) {
+      const cleanEndpoint = cleanBaseUrl(custom.endpoint);
+      const isResponse = !!custom.useResponseApi;
       const openai = createOpenAI({
         apiKey: custom.apiKey?.trim() || "dummy-key",
-        baseURL: custom.endpoint.trim(),
+        baseURL: cleanEndpoint,
         headers: {
           "cf-aig-metadata": JSON.stringify({
             source: "think-edge-agent",
             convo: this.name,
             custom_model: custom.modelId,
+            protocol: isResponse ? "responses" : "chat_completions",
           }),
         },
       });
+
+      model = isResponse
+        ? openai.responses(custom.modelId.trim())
+        : openai.chat(custom.modelId.trim());
+    }
+
+    const mcpServers = (ctx.body?.mcpServers as McpServerConfig[] | undefined) || [];
+    const dynamicTools: ToolSet = {};
+
+    for (const s of mcpServers) {
+      if (!s.enabled || s.id === "gbrain-default") continue;
+      const prefix = (s.name || "mcp").toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 20);
+      for (const t of s.cachedTools || []) {
+        const toolName = `${prefix}_${t.name}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+        dynamicTools[toolName] = tool({
+          description: t.description || `Tool ${t.name} from MCP server ${s.name}`,
+          inputSchema: z.record(z.string(), z.unknown()),
+          execute: async (args) => {
+            const res = await mcpCallTool(s, t.name, args as Record<string, unknown>);
+            if (!res.ok) {
+              return { error: res.error || "MCP tool execution failed" };
+            }
+            return res.text || "Success";
+          },
+        });
+      }
+    }
+
+    if (model || Object.keys(dynamicTools).length > 0) {
       return {
-        model: openai(custom.modelId.trim()),
+        ...(model ? { model } : {}),
+        ...(Object.keys(dynamicTools).length > 0
+          ? { tools: { ...this.getTools(), ...dynamicTools } }
+          : {}),
       };
     }
   }
 
-
-
   override getSystemPrompt(): string {
-    return [
+    const defaultPrompt = [
       "You are Aki's Cloudflare edge agent.",
       "Reply in the user's language (Chinese if they write Chinese).",
       "You have two systems:",
@@ -99,6 +157,15 @@ export class Assistant extends Think<Env> {
       "Keep replies concise. Cite GBrain slugs when you use them.",
       "Do not invent holdings, keys, or infra facts — look them up.",
     ].join("\n");
+
+    if (this.currentCustomPrompt) {
+      if (this.currentPromptMode === "override") {
+        return this.currentCustomPrompt;
+      }
+      return `${defaultPrompt}\n\n[Custom User Instructions / Persona]\n${this.currentCustomPrompt}`;
+    }
+
+    return defaultPrompt;
   }
 
   override getTools(): ToolSet {
