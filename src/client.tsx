@@ -794,38 +794,57 @@ function extractThoughtAndAnswer(message: UIMessage): ExtractedMessageContent {
     }
   }
 
-  // Detect <think>...</think> tags embedded inside LLM text output (e.g. DeepSeek-R1, QwQ)
-  if (textPartsText.includes("<think>")) {
-    const thinkStart = textPartsText.indexOf("<think>");
-    const thinkEnd = textPartsText.indexOf("</think>");
+  // Parse <think>...</think> blocks embedded in LLM text output (DeepSeek-R1,
+  // QwQ, or our server-side reasoningAwareFetch which injects them). Handles:
+  //  - multiple think blocks (one per agent step / tool round)
+  //  - an unterminated trailing <think> (stream still in progress, or the
+  //    model forgot to close): treated as in-progress thinking, everything
+  //    before it stays as the visible answer.
+  let combinedThought = thoughtPartsText;
+  const cleanedParts: string[] = [];
+  let rest = textPartsText;
+  let hasOpenThink = false;
 
-    if (thinkEnd !== -1) {
-      const thoughtInTag = textPartsText.substring(thinkStart + 7, thinkEnd).trim();
-      const before = textPartsText.substring(0, thinkStart);
-      const after = textPartsText.substring(thinkEnd + 8);
-      const cleanedMain = (before + after).trim();
-      const combinedThought = (thoughtPartsText ? thoughtPartsText + "\n\n" : "") + thoughtInTag;
-
-      return {
-        thoughtText: combinedThought.trim() || null,
-        mainText: cleanedMain,
-        isThinking: false,
-      };
-    } else {
-      const thoughtInTag = textPartsText.substring(thinkStart + 7).trim();
-      const before = textPartsText.substring(0, thinkStart).trim();
-      const combinedThought = (thoughtPartsText ? thoughtPartsText + "\n\n" : "") + thoughtInTag;
-
-      return {
-        thoughtText: combinedThought.trim() || null,
-        mainText: before,
-        isThinking: true,
-      };
+  while (rest.length > 0) {
+    const start = rest.indexOf("<think>");
+    if (start === -1) {
+      cleanedParts.push(rest);
+      break;
     }
+    cleanedParts.push(rest.substring(0, start));
+    const afterStart = rest.substring(start + 7);
+    const end = afterStart.indexOf("</think>");
+    if (end === -1) {
+      // Unterminated: everything after is (in-progress) thinking.
+      const tail = afterStart.trim();
+      if (tail) {
+        combinedThought = combinedThought ? combinedThought + "\n\n" + tail : tail;
+        hasOpenThink = true;
+      }
+      break;
+    }
+    const block = afterStart.substring(0, end).trim();
+    if (block) {
+      combinedThought = combinedThought ? combinedThought + "\n\n" + block : block;
+    }
+    rest = afterStart.substring(end + 8);
+  }
+
+  const cleanedMain = cleanedParts.join("").trim();
+  const thoughtText = combinedThought.trim() || null;
+
+  if (thoughtText) {
+    return {
+      thoughtText,
+      mainText: cleanedMain,
+      // In-progress only when a think block is still open AND the model is
+      // streaming (caller ORs in the busy state for the last message).
+      isThinking: hasOpenThink,
+    };
   }
 
   return {
-    thoughtText: thoughtPartsText.trim() ? thoughtPartsText.trim() : null,
+    thoughtText: null,
     mainText: textPartsText,
     isThinking: false,
   };
@@ -3460,21 +3479,23 @@ function Chat({
                 ) : (
                   (() => {
                     const { thoughtText, mainText, isThinking } = extractThoughtAndAnswer(m);
+                    const isLast = m.id === messages[messages.length - 1]?.id;
+                    // An unterminated <think> only means "still thinking" while
+                    // the stream is live; after the turn ends it renders as a
+                    // completed CoT block.
+                    const activelyThinking = busy && isLast;
                     return (
                       <>
                         <ToolBits message={m} />
                         {thoughtText && (
                           <ThoughtBlock
                             thought={thoughtText}
-                            isThinking={
-                              isThinking ||
-                              (busy && m.id === messages[messages.length - 1]?.id && !mainText)
-                            }
+                            isThinking={isThinking && activelyThinking}
                           />
                         )}
                         {mainText ? (
                           <Markdown text={mainText} />
-                        ) : isThinking || (busy && m.id === messages[messages.length - 1]?.id) ? null : (
+                        ) : isThinking || (busy && isLast) ? null : (
                           <Markdown text={textOf(m)} />
                         )}
                       </>

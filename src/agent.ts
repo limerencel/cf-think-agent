@@ -55,12 +55,16 @@ function reasoningAwareFetch(
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let inThink = false;
+    // SSE lines can be split across network chunks — buffer the partial tail.
+    let lineBuf = "";
 
     const transform = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
-        const text = decoder.decode(chunk, { stream: true });
-        // SSE events are separated by blank lines; process line-wise.
+        const text = lineBuf + decoder.decode(chunk, { stream: true });
+        // SSE events are separated by blank lines; process only complete
+        // lines and keep the trailing partial line for the next chunk.
         const lines = text.split("\n");
+        lineBuf = lines.pop() ?? "";
         const out: string[] = [];
         for (const line of lines) {
           if (!line.startsWith("data:")) {
@@ -112,7 +116,35 @@ function reasoningAwareFetch(
           }
           out.push("data: " + JSON.stringify(evt));
         }
+        // [DONE] sentinel: close any dangling <think> fence so the frontend
+        // never sees an unterminated block (which would swallow the whole
+        // answer into the CoT panel).
+        if (inThink) {
+          const doneIdx = out.findIndex((l) => l.trim() === "data: [DONE]");
+          if (doneIdx !== -1) {
+            out.splice(doneIdx, 0, 'data: {"choices":[{"delta":{"content":"</think>"}}]}');
+          } else {
+            out.push('data: {"choices":[{"delta":{"content":"</think>"}}]}');
+            out.push("data: [DONE]");
+          }
+          inThink = false;
+        }
         controller.enqueue(encoder.encode(out.join("\n")));
+      },
+      flush(controller) {
+        // Stream ended without [DONE]: flush any buffered partial line, then
+        // close a dangling <think> fence so the frontend never sees an
+        // unterminated block.
+        if (lineBuf) {
+          controller.enqueue(encoder.encode(lineBuf + "\n"));
+          lineBuf = "";
+        }
+        if (inThink) {
+          controller.enqueue(
+            encoder.encode('data: {"choices":[{"delta":{"content":"</think>"}}]}\n\ndata: [DONE]\n\n')
+          );
+          inThink = false;
+        }
       },
     });
 
