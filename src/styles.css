@@ -372,10 +372,37 @@ article.from-agent { max-width: 100%; }
 .chip.err { color: var(--err); }
 
 .thinking {
-  color: var(--muted);
-  font-size: 13.5px;
-  font-family: var(--font-body);
-  font-style: italic;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 0;
+}
+
+.thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.4;
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
+@keyframes thinking-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dot {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 /* ---------- markdown ---------- */

@@ -31,6 +31,99 @@ function cleanBaseUrl(raw: string): string {
   return url;
 }
 
+/**
+ * Reasoning tokens from OpenAI-compatible backends often arrive via
+ * non-standard stream fields (`delta.reasoning_content` — DeepSeek/Qwen style,
+ * `delta.reasoning` — OpenRouter style). @ai-sdk/openai only parses
+ * delta.content/tool_calls/annotations, so those tokens are silently dropped.
+ *
+ * Fix: pass a wrapped `fetch` to createOpenAI. When the response is an SSE
+ * stream we pipe it through a TransformStream that rewrites each reasoning
+ * delta into a fenced `<think>` segment inside delta.content. The frontend
+ * already parses `<think>` tags into a collapsible CoT block
+ * (extractThoughtAndAnswer), so no client changes are needed.
+ */
+function reasoningAwareFetch(
+  fetchFn: typeof fetch | undefined
+): typeof fetch {
+  const base = fetchFn || ((input: any, init?: any) => fetch(input, init));
+  return async (input: any, init?: any) => {
+    const res = await base(input, init);
+    const ct = (res.headers?.get?.("content-type") || "") as string;
+    if (!ct.includes("text/event-stream") || !res.body) return res;
+
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let inThink = false;
+
+    const transform = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        const text = decoder.decode(chunk, { stream: true });
+        // SSE events are separated by blank lines; process line-wise.
+        const lines = text.split("\n");
+        const out: string[] = [];
+        for (const line of lines) {
+          if (!line.startsWith("data:")) {
+            out.push(line);
+            continue;
+          }
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") {
+            out.push(line);
+            continue;
+          }
+          let evt: any;
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            out.push(line);
+            continue;
+          }
+          const choice = evt?.choices?.[0];
+          const delta = choice?.delta;
+          if (!delta) {
+            out.push(line);
+            continue;
+          }
+          const reasoning: string | undefined =
+            delta.reasoning_content ?? delta.reasoning;
+          if (typeof reasoning === "string" && reasoning.length > 0) {
+            // Merge reasoning into content, fenced with <think> tags.
+            let content = typeof delta.content === "string" ? delta.content : "";
+            if (!inThink && content === "") {
+              content += "<think>";
+              inThink = true;
+            } else if (!inThink) {
+              content = "<think>" + content;
+              inThink = true;
+            }
+            content += reasoning;
+            delta.content = content;
+            delete delta.reasoning_content;
+            delete delta.reasoning;
+          } else if (
+            inThink &&
+            typeof delta.content === "string" &&
+            delta.content.length > 0
+          ) {
+            // First real content token: close the think fence.
+            delta.content = "</think>" + delta.content;
+            inThink = false;
+          }
+          out.push("data: " + JSON.stringify(evt));
+        }
+        controller.enqueue(encoder.encode(out.join("\n")));
+      },
+    });
+
+    return new Response(res.body.pipeThrough(transform), {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
+  };
+}
+
 export class Assistant extends Think<Env> {
   override maxSteps = 16;
 
@@ -63,6 +156,9 @@ export class Assistant extends Think<Env> {
     const openai = createOpenAI({
       apiKey: this.env.OPENCODE_GO_API_KEY,
       baseURL: cleanBaseUrl(this.env.AIG_BASE_URL),
+      // Rewrite reasoning_content/reasoning stream deltas into <think> fences
+      // so CoT survives the AI SDK parser (see reasoningAwareFetch above).
+      fetch: reasoningAwareFetch(undefined),
       headers: {
         // Tag every AI Gateway request as coming from the Think edge agent,
         // with the conversation id, so hermes-aig logs are filterable.
@@ -103,6 +199,10 @@ export class Assistant extends Think<Env> {
       const openai = createOpenAI({
         apiKey: custom.apiKey?.trim() || "dummy-key",
         baseURL: cleanEndpoint,
+        // Rewrite reasoning_content/reasoning stream deltas into <think>
+        // fences so CoT survives the AI SDK parser (chat protocol only —
+        // the responses API already emits reasoning events natively).
+        ...(isResponse ? {} : { fetch: reasoningAwareFetch(undefined) }),
         headers: {
           "cf-aig-metadata": JSON.stringify({
             source: "think-edge-agent",
@@ -142,11 +242,26 @@ export class Assistant extends Think<Env> {
     }
 
     if (model || Object.keys(dynamicTools).length > 0) {
+      // Pass sampling + reasoning parameters through to streamText.
+      // providerOptions.openai.reasoningEffort maps to the request body's
+      // reasoning_effort field (verified in @ai-sdk/openai internal source).
+      const turnParams = custom
+        ? {
+            ...(custom.temperature !== undefined ? { temperature: custom.temperature } : {}),
+            ...(custom.maxTokens !== undefined ? { maxOutputTokens: custom.maxTokens } : {}),
+            ...(custom.topP !== undefined ? { topP: custom.topP } : {}),
+            ...(custom.reasoningEffort && custom.reasoningEffort !== "none"
+              ? { providerOptions: { openai: { reasoningEffort: custom.reasoningEffort } } }
+              : {}),
+          }
+        : {};
+
       return {
         ...(model ? { model } : {}),
         ...(Object.keys(dynamicTools).length > 0
           ? { tools: { ...this.getTools(), ...dynamicTools } }
           : {}),
+        ...turnParams,
       };
     }
   }

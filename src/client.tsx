@@ -851,7 +851,7 @@ function ThoughtBlock({ thought, isThinking }: { thought: string; isThinking?: b
             <BrainIcon />
           </span>
           <span className="thought-title">
-            {isThinking ? "Thinking in progress…" : "Chain of Thought"}
+            {isThinking ? "Thinking…" : "Chain of Thought"}
           </span>
           {!isThinking && (
             <span className="thought-length-badge">
@@ -3483,7 +3483,13 @@ function Chat({
                 )}
               </article>
             ))}
-            {busy && <div className="thinking">Thinking…</div>}
+            {busy && (
+              <div className="thinking" aria-live="polite">
+                <span className="thinking-dot" />
+                <span className="thinking-dot" style={{ animationDelay: "0.15s" }} />
+                <span className="thinking-dot" style={{ animationDelay: "0.3s" }} />
+              </div>
+            )}
             {hasError && activeErrorStr && (
               <ChatErrorCard
                 rawError={activeErrorStr}
