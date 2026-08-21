@@ -380,13 +380,23 @@ async function cloudFetchMcpTools(
   endpoint: string,
   authType: McpAuthType,
   bearerToken?: string,
+  cfAccessClientId?: string,
+  cfAccessClientSecret?: string,
   oauthTokens?: any,
   serverId?: string
 ): Promise<McpToolDef[]> {
   const res = await fetch("/api/mcp/fetch-tools", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ endpoint, authType, bearerToken, oauthTokens, serverId }),
+    body: JSON.stringify({
+      endpoint,
+      authType,
+      bearerToken,
+      cfAccessClientId,
+      cfAccessClientSecret,
+      oauthTokens,
+      serverId,
+    }),
   });
   const data = (await res.json()) as { ok: boolean; tools?: McpToolDef[]; error?: string };
   if (!res.ok || !data.ok) {
@@ -1884,6 +1894,9 @@ function McpServerEditor({
   const [endpoint, setEndpoint] = useState(server.endpoint);
   const [authType, setAuthType] = useState<McpAuthType>(server.authType || "none");
   const [bearerToken, setBearerToken] = useState(server.bearerToken || "");
+  const [cfAccessClientId, setCfAccessClientId] = useState(server.cfAccessClientId || "");
+  const [cfAccessClientSecret, setCfAccessClientSecret] = useState(server.cfAccessClientSecret || "");
+  const [showCfSecret, setShowCfSecret] = useState(false);
   const [oauthClientId, setOauthClientId] = useState(server.oauthClientId || "");
   const [oauthClientSecret, setOauthClientSecret] = useState(server.oauthClientSecret || "");
   const [oauthTokens, setOauthTokens] = useState(server.oauthTokens);
@@ -1964,6 +1977,8 @@ function McpServerEditor({
         endpoint.trim(),
         authType,
         bearerToken.trim() || undefined,
+        cfAccessClientId.trim() || undefined,
+        cfAccessClientSecret.trim() || undefined,
         oauthTokens,
         server.id
       );
@@ -1996,6 +2011,8 @@ function McpServerEditor({
       endpoint: endpoint.trim(),
       authType,
       bearerToken: bearerToken.trim(),
+      cfAccessClientId: cfAccessClientId.trim() || undefined,
+      cfAccessClientSecret: cfAccessClientSecret.trim() || undefined,
       oauthClientId: oauthClientId.trim() || undefined,
       oauthClientSecret: oauthClientSecret.trim() || undefined,
       oauthTokens,
@@ -2012,7 +2029,7 @@ function McpServerEditor({
       <div className="form-group">
         <label className="form-label">
           MCP Server Name
-          <span className="form-hint">e.g. Weather Service, GitHub MCP, Inkstone</span>
+          <span className="form-hint">e.g. Cloudflare MCP Portal, Weather Service, Inkstone</span>
         </label>
         <input
           type="text"
@@ -2158,6 +2175,7 @@ function McpServerEditor({
               <div className="form-group">
                 <label className="form-label" style={{ fontSize: 12 }}>
                   Custom Client Secret (Optional)
+                  <span className="form-hint">Optional for confidential clients</span>
                 </label>
                 <input
                   type="password"
@@ -2487,7 +2505,7 @@ function SettingsModal({
     onSaveProviders(updated);
   };
 
-  const handleSaveMcpServer = (updatedServer: McpServerConfig, isNew?: boolean) => {
+  const handleSaveMcpServer = async (updatedServer: McpServerConfig, isNew?: boolean) => {
     let updated = [...mcpServers];
     if (isNew) {
       updated.push(updatedServer);
@@ -2498,17 +2516,33 @@ function SettingsModal({
       onSaveMcpServers(updated);
       setExpandedMcpId(null);
     }
+    try {
+      const cloudServers = await cloudSaveMcpServer(updatedServer);
+      if (Array.isArray(cloudServers)) onSaveMcpServers(cloudServers);
+    } catch (err) {
+      console.error("Failed to save MCP server to cloud:", err);
+    }
   };
 
-  const handleDeleteMcpServer = (id: string) => {
+  const handleDeleteMcpServer = async (id: string) => {
     if (id === "gbrain-default") return;
     const updated = mcpServers.filter((s) => s.id !== id);
     onSaveMcpServers(updated);
+    try {
+      const cloudServers = await cloudRemoveMcpServer(id);
+      if (Array.isArray(cloudServers)) onSaveMcpServers(cloudServers);
+    } catch (err) {
+      console.error("Failed to remove MCP server from cloud:", err);
+    }
   };
 
-  const handleToggleMcpServer = (id: string) => {
+  const handleToggleMcpServer = async (id: string) => {
     const updated = mcpServers.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s));
     onSaveMcpServers(updated);
+    const target = updated.find((s) => s.id === id);
+    if (target) {
+      cloudSaveMcpServer(target).catch(() => {});
+    }
   };
 
   const handleOAuthSuccess = async () => {
@@ -2529,6 +2563,8 @@ function SettingsModal({
         server.endpoint,
         server.authType,
         server.bearerToken,
+        server.cfAccessClientId,
+        server.cfAccessClientSecret,
         server.oauthTokens,
         server.id
       );
@@ -3638,6 +3674,9 @@ function AppInner() {
   const handleSaveMcpServers = async (nextServers: McpServerConfig[]) => {
     setMcpServers(nextServers);
     saveLocalMcpServers(nextServers);
+    cloudSaveAllMcpServers(nextServers).catch((err) => {
+      console.error("Failed to sync MCP servers with cloud:", err);
+    });
   };
 
   const handleSaveSystemPrompt = async (prompt: string, mode: "append" | "override") => {

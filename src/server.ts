@@ -397,6 +397,8 @@ export default {
             endpoint,
             authType: body.authType || "bearer",
             bearerToken,
+            cfAccessClientId: body.cfAccessClientId?.trim(),
+            cfAccessClientSecret: body.cfAccessClientSecret?.trim(),
             oauthTokens: body.oauthTokens,
           });
 
@@ -431,7 +433,17 @@ export default {
           const discovery = await discoverMcpOAuth(endpoint, redirectUri);
           const { verifier, challenge } = await generatePkcePair();
           const state = generateRandomString(32);
-          const clientId = body?.clientId?.trim() || discovery.clientId || "think-agent";
+          const clientId = body?.clientId?.trim() || discovery.clientId;
+
+          if (!clientId) {
+            const extraHint = discovery.registrationError
+              ? `${discovery.registrationError}. Note: Cloudflare Access requires '${redirectUri}' to be added in Zero Trust Dashboard -> Settings -> Authentication -> Allowed OAuth redirect URIs.`
+              : `Unable to obtain client_id from ${discovery.authorizationServer}. Please specify a Custom Client ID under Advanced settings or configure DCR Allowed Redirect URIs.`;
+            return Response.json(
+              { ok: false, error: extraHint, discovery },
+              { status: 400 }
+            );
+          }
 
           await stub.saveOAuthSession({
             state,
@@ -452,6 +464,8 @@ export default {
           authUrl.searchParams.set("state", state);
           authUrl.searchParams.set("code_challenge", challenge);
           authUrl.searchParams.set("code_challenge_method", "S256");
+          const resourceUri = discovery.resource || endpoint;
+          authUrl.searchParams.set("resource", resourceUri);
           if (discovery.scopesSupported && discovery.scopesSupported.length > 0) {
             authUrl.searchParams.set("scope", discovery.scopesSupported.join(" "));
           }
@@ -520,6 +534,7 @@ export default {
             code,
             redirectUri: session.redirectUri,
             codeVerifier: session.codeVerifier,
+            resource: session.endpoint,
           });
 
           // 2. Fetch exposed tools

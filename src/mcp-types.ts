@@ -1,4 +1,4 @@
-export type McpAuthType = "none" | "bearer" | "oauth";
+export type McpAuthType = "none" | "bearer" | "cf_service_token" | "oauth";
 
 export interface McpToolDef {
   name: string;
@@ -12,6 +12,8 @@ export interface McpServerConfig {
   endpoint: string;
   authType: McpAuthType;
   bearerToken?: string;
+  cfAccessClientId?: string;
+  cfAccessClientSecret?: string;
   oauthClientId?: string;
   oauthClientSecret?: string;
   oauthAuthUrl?: string;

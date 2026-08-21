@@ -109,6 +109,20 @@ export class ConvoIndex extends Agent<Env> {
     } catch {
       /* ignore if column already exists */
     }
+    try {
+      await this.ctx.storage.sql.exec(
+        "ALTER TABLE mcp_servers ADD COLUMN cf_access_client_id TEXT"
+      );
+    } catch {
+      /* ignore if column already exists */
+    }
+    try {
+      await this.ctx.storage.sql.exec(
+        "ALTER TABLE mcp_servers ADD COLUMN cf_access_client_secret TEXT"
+      );
+    } catch {
+      /* ignore if column already exists */
+    }
   }
 
   private getDefaultPreset(): ProviderConfig {
@@ -384,6 +398,8 @@ export class ConvoIndex extends Agent<Env> {
         endpoint: r.endpoint as string,
         authType: (r.auth_type as any) || "none",
         bearerToken: (r.bearer_token as string) || "",
+        cfAccessClientId: (r.cf_access_client_id as string) || undefined,
+        cfAccessClientSecret: (r.cf_access_client_secret as string) || undefined,
         oauthClientId: (r.oauth_client_id as string) || undefined,
         oauthClientSecret: (r.oauth_client_secret as string) || undefined,
         oauthAuthUrl: (r.oauth_auth_url as string) || undefined,
@@ -448,6 +464,8 @@ export class ConvoIndex extends Agent<Env> {
       endpoint: r.endpoint as string,
       authType: (r.auth_type as any) || "none",
       bearerToken: (r.bearer_token as string) || "",
+      cfAccessClientId: (r.cf_access_client_id as string) || undefined,
+      cfAccessClientSecret: (r.cf_access_client_secret as string) || undefined,
       oauthClientId: (r.oauth_client_id as string) || undefined,
       oauthClientSecret: (r.oauth_client_secret as string) || undefined,
       oauthAuthUrl: (r.oauth_auth_url as string) || undefined,
@@ -469,13 +487,15 @@ export class ConvoIndex extends Agent<Env> {
     const oauthScopesJson = server.oauthScopes ? JSON.stringify(server.oauthScopes) : null;
 
     await this.ctx.storage.sql.exec(
-      `INSERT INTO mcp_servers (id, name, endpoint, auth_type, bearer_token, oauth_client_id, oauth_client_secret, oauth_auth_url, oauth_token_url, oauth_scopes, oauth_tokens, enabled, cached_tools, is_preset, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO mcp_servers (id, name, endpoint, auth_type, bearer_token, cf_access_client_id, cf_access_client_secret, oauth_client_id, oauth_client_secret, oauth_auth_url, oauth_token_url, oauth_scopes, oauth_tokens, enabled, cached_tools, is_preset, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          endpoint = excluded.endpoint,
          auth_type = excluded.auth_type,
          bearer_token = excluded.bearer_token,
+         cf_access_client_id = excluded.cf_access_client_id,
+         cf_access_client_secret = excluded.cf_access_client_secret,
          oauth_client_id = excluded.oauth_client_id,
          oauth_client_secret = excluded.oauth_client_secret,
          oauth_auth_url = excluded.oauth_auth_url,
@@ -491,6 +511,8 @@ export class ConvoIndex extends Agent<Env> {
       server.endpoint,
       server.authType || "none",
       server.bearerToken ?? null,
+      server.cfAccessClientId ?? null,
+      server.cfAccessClientSecret ?? null,
       server.oauthClientId ?? null,
       server.oauthClientSecret ?? null,
       server.oauthAuthUrl ?? null,

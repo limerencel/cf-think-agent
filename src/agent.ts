@@ -34,6 +34,10 @@ function cleanBaseUrl(raw: string): string {
 export class Assistant extends Think<Env> {
   override maxSteps = 16;
 
+  // Record message + tool payloads in traces (Agents dashboard session replay)
+  override storeMessages = true;
+  override storeTools = true;
+
   // Wait for MCP servers (Parallel search) to be connected before inference.
   override waitForMcpConnections = { timeout: 10_000 };
 

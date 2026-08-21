@@ -35,13 +35,22 @@ function parseSseOrJson(raw: string): any {
 }
 
 export function buildMcpHeaders(
-  config: Pick<McpServerConfig, "authType" | "bearerToken" | "oauthTokens">
+  config: Pick<McpServerConfig, "authType" | "bearerToken" | "oauthTokens" | "cfAccessClientId" | "cfAccessClientSecret">
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
     "User-Agent": "cf-think-agent/0.1.0",
   };
+
+  if (config.authType === "cf_service_token" || config.cfAccessClientId) {
+    if (config.cfAccessClientId?.trim()) {
+      headers["CF-Access-Client-Id"] = config.cfAccessClientId.trim();
+    }
+    if (config.cfAccessClientSecret?.trim()) {
+      headers["CF-Access-Client-Secret"] = config.cfAccessClientSecret.trim();
+    }
+  }
 
   const token =
     config.authType === "oauth"
@@ -85,12 +94,14 @@ export async function generatePkcePair(): Promise<{ verifier: string; challenge:
 }
 
 export interface McpOAuthDiscoveryResult {
+  resource?: string;
   authorizationServer: string;
   authorizationEndpoint: string;
   tokenEndpoint: string;
   registrationEndpoint?: string;
   scopesSupported: string[];
   clientId?: string;
+  registrationError?: string;
 }
 
 export async function discoverMcpOAuth(
@@ -100,28 +111,64 @@ export async function discoverMcpOAuth(
   const urlObj = new URL(endpoint);
   const origin = urlObj.origin;
 
+  let resource = endpoint;
   let authServer = origin;
   let scopes: string[] = [];
 
-  // 1. Try protected resource metadata endpoint (RFC 9728)
+  // 1. Try probing the endpoint itself for WWW-Authenticate (RFC 6750 / RFC 9728)
   try {
-    const resourceRes = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
-    if (resourceRes.ok) {
-      const data: any = await resourceRes.json();
-      if (Array.isArray(data.authorization_servers) && data.authorization_servers[0]) {
-        authServer = data.authorization_servers[0];
+    const probeRes = await fetch(endpoint, {
+      method: "HEAD",
+      headers: { Accept: "application/json, text/event-stream" },
+    });
+    const wwwAuth = probeRes.headers.get("www-authenticate");
+    if (wwwAuth) {
+      const matchAuthServer = wwwAuth.match(/(?:authorization_uri|authorization_server|issuer)="([^"]+)"/i);
+      if (matchAuthServer && matchAuthServer[1]) {
+        authServer = matchAuthServer[1];
       }
-      if (Array.isArray(data.scopes_supported)) {
-        scopes = data.scopes_supported;
+      const matchResource = wwwAuth.match(/resource(?:_uri)?="([^"]+)"/i);
+      if (matchResource && matchResource[1]) {
+        resource = matchResource[1];
       }
     }
   } catch {
-    /* fallback to authServer = origin */
+    /* continue to metadata discovery */
   }
 
-  // 2. Fetch authorization server metadata (RFC 8414)
-  let authEndpoint = `${authServer}/authorize`;
-  let tokenEndpoint = `${authServer}/oauth/token`;
+  // 2. Try protected resource metadata endpoint (RFC 9728)
+  try {
+    const resourceEndpoints = [
+      `${origin}/.well-known/oauth-protected-resource/mcp`,
+      `${origin}/.well-known/oauth-protected-resource`,
+    ];
+    for (const rUrl of resourceEndpoints) {
+      try {
+        const resourceRes = await fetch(rUrl);
+        if (resourceRes.ok) {
+          const data: any = await resourceRes.json();
+          if (data.resource && typeof data.resource === "string") {
+            resource = data.resource;
+          }
+          if (Array.isArray(data.authorization_servers) && data.authorization_servers[0]) {
+            authServer = data.authorization_servers[0];
+            if (Array.isArray(data.scopes_supported)) {
+              scopes = data.scopes_supported;
+            }
+            break;
+          }
+        }
+      } catch {
+        /* try next */
+      }
+    }
+  } catch {
+    /* fallback to authServer */
+  }
+
+  // 3. Fetch authorization server metadata (RFC 8414 / OpenID Discovery)
+  let authEndpoint = `${authServer}/cdn-cgi/access/oauth/authorization`;
+  let tokenEndpoint = `${authServer}/cdn-cgi/access/oauth/token`;
   let registrationEndpoint: string | undefined = undefined;
 
   try {
@@ -150,15 +197,22 @@ export async function discoverMcpOAuth(
     /* use standard defaults */
   }
 
-  // 3. Dynamic client registration (RFC 7591) if supported
+  // Fallback defaults if endpoints still have generic values
+  if (authServer.includes("cloudflareaccess.com") && !registrationEndpoint) {
+    registrationEndpoint = `${authServer}/cdn-cgi/access/oauth/registration`;
+  }
+
+  // 4. Dynamic client registration (RFC 7591) if supported
   let clientId: string | undefined = undefined;
+  let registrationError: string | undefined = undefined;
+
   if (registrationEndpoint) {
     try {
       const regRes = await fetch(registrationEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          client_name: "Think Agent",
+          client_name: "cf-think-agent",
           redirect_uris: [redirectUri],
           grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
@@ -170,19 +224,25 @@ export async function discoverMcpOAuth(
         if (regData.client_id) {
           clientId = regData.client_id;
         }
+      } else {
+        const errData: any = await regRes.json().catch(() => ({}));
+        const msg = errData.error_description || errData.error || `HTTP ${regRes.status}`;
+        registrationError = `Dynamic Client Registration (DCR) rejected: ${msg}`;
       }
-    } catch {
-      /* ignore registration failure */
+    } catch (err: any) {
+      registrationError = `Dynamic Client Registration network error: ${err.message || String(err)}`;
     }
   }
 
   return {
+    resource,
     authorizationServer: authServer,
     authorizationEndpoint: authEndpoint,
     tokenEndpoint,
     registrationEndpoint,
     scopesSupported: scopes,
     clientId,
+    registrationError,
   };
 }
 
@@ -193,6 +253,7 @@ export async function exchangeOAuthCode(params: {
   code: string;
   redirectUri: string;
   codeVerifier: string;
+  resource?: string;
 }): Promise<{
   accessToken: string;
   refreshToken?: string;
@@ -206,6 +267,7 @@ export async function exchangeOAuthCode(params: {
   body.set("code", params.code);
   body.set("redirect_uri", params.redirectUri);
   body.set("code_verifier", params.codeVerifier);
+  if (params.resource) body.set("resource", params.resource);
 
   const res = await fetch(params.tokenEndpoint, {
     method: "POST",
@@ -246,6 +308,7 @@ export async function refreshOAuthToken(params: {
   clientId: string;
   clientSecret?: string;
   refreshToken: string;
+  resource?: string;
 }): Promise<{
   accessToken: string;
   refreshToken?: string;
@@ -256,6 +319,7 @@ export async function refreshOAuthToken(params: {
   body.set("client_id", params.clientId);
   if (params.clientSecret) body.set("client_secret", params.clientSecret);
   body.set("refresh_token", params.refreshToken);
+  if (params.resource) body.set("resource", params.resource);
 
   const res = await fetch(params.tokenEndpoint, {
     method: "POST",
@@ -282,7 +346,10 @@ export async function refreshOAuthToken(params: {
  * Probes an MCP endpoint and retrieves the list of exposed tools.
  */
 export async function mcpListTools(
-  config: Pick<McpServerConfig, "endpoint" | "authType" | "bearerToken" | "oauthTokens">
+  config: Pick<
+    McpServerConfig,
+    "endpoint" | "authType" | "bearerToken" | "cfAccessClientId" | "cfAccessClientSecret" | "oauthTokens"
+  >
 ): Promise<McpToolDef[]> {
   const url = config.endpoint.trim();
   if (!url) throw new Error("Endpoint URL is required");
@@ -356,7 +423,10 @@ export async function mcpListTools(
  * Executes a tool call against an MCP endpoint.
  */
 export async function mcpCallTool(
-  config: Pick<McpServerConfig, "endpoint" | "authType" | "bearerToken" | "oauthTokens">,
+  config: Pick<
+    McpServerConfig,
+    "endpoint" | "authType" | "bearerToken" | "cfAccessClientId" | "cfAccessClientSecret" | "oauthTokens"
+  >,
   toolName: string,
   args: Record<string, unknown> = {}
 ): Promise<McpRpcResult> {

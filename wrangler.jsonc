@@ -24,5 +24,8 @@
     "MODEL_ID": "deepseek-v4-flash",
     "GBRAIN_MCP_URL": "https://gbrain-mcp.itsuhiro.com/mcp"
   },
-  "observability": { "enabled": true }
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true }
+  }
 }
