@@ -62,8 +62,6 @@ export class ConvoIndex extends Agent<Env> {
         endpoint TEXT NOT NULL,
         auth_type TEXT NOT NULL,
         bearer_token TEXT,
-        cf_access_client_id TEXT,
-        cf_access_client_secret TEXT,
         oauth_client_id TEXT,
         oauth_client_secret TEXT,
         oauth_auth_url TEXT,
