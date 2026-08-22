@@ -2647,14 +2647,6 @@ function HindsightSettingsEditor({
           </button>
           <button
             type="button"
-            className={`tab-btn ${authType === "cf_service_token" ? "active" : ""}`}
-            style={{ flex: 1, justifyContent: "center" }}
-            onClick={() => setAuthType("cf_service_token")}
-          >
-            CF Service Token
-          </button>
-          <button
-            type="button"
             className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
             style={{ flex: 1, justifyContent: "center" }}
             onClick={() => setAuthType("oauth")}
@@ -2686,47 +2678,6 @@ function HindsightSettingsEditor({
             >
               {showToken ? <EyeOffIcon /> : <EyeIcon />}
             </button>
-          </div>
-        </div>
-      )}
-
-      {authType === "cf_service_token" && (
-        <div className="protocol-select-box" style={{ marginTop: 2, marginBottom: 4 }}>
-          <div className="form-group" style={{ marginBottom: 10 }}>
-            <label className="form-label">
-              CF-Access-Client-Id
-              <span className="form-hint">Cloudflare Access Service Token Client ID</span>
-            </label>
-            <input
-              type="text"
-              className="text-input"
-              placeholder="e.g. 13dd16844ef8...access"
-              value={cfAccessClientId}
-              onChange={(e) => setCfAccessClientId(e.target.value)}
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 2 }}>
-            <label className="form-label">
-              CF-Access-Client-Secret
-              <span className="form-hint">Cloudflare Access Service Token Client Secret</span>
-            </label>
-            <div className="input-row">
-              <input
-                type={showCfSecret ? "text" : "password"}
-                className={showCfSecret ? "text-input" : "text-input key-masked"}
-                placeholder="Cloudflare Service Secret"
-                value={cfAccessClientSecret}
-                onChange={(e) => setCfAccessClientSecret(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => setShowCfSecret(!showCfSecret)}
-                title={showCfSecret ? "Hide secret" : "Show secret"}
-              >
-                {showCfSecret ? <EyeOffIcon /> : <EyeIcon />}
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -2785,33 +2736,6 @@ function HindsightSettingsEditor({
         </div>
       </div>
 
-      {/* Live Test & Diagnostics */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={handleTestConnection}
-          disabled={testing || !endpoint.trim()}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-        >
-          {testing ? <span className="spinner" /> : <SparklesIcon />}
-          <span>{testing ? "Testing Handshake…" : "Test Connection & Probe Tools"}</span>
-        </button>
-
-        {testResult.type === "ok" && (
-          <span className="badge badge-connected" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <CheckIcon />
-            {testResult.message}
-          </span>
-        )}
-        {testResult.type === "err" && (
-          <span className="badge badge-auth" style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(220, 50, 50, 0.12)", color: "#e05555" }}>
-            <AlertTriangleIcon />
-            {testResult.message}
-          </span>
-        )}
-      </div>
-
       {statusMsg && (
         <div className={`banner-msg ${statusMsg.type}`}>
           {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
@@ -2819,7 +2743,34 @@ function HindsightSettingsEditor({
         </div>
       )}
 
-      <div className="form-actions" style={{ marginTop: 12 }}>
+      {/* Action Bar: Test Connection on Left, Save on Right (Horizontal Alignment) */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleTestConnection}
+            disabled={testing || !endpoint.trim()}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            {testing ? <span className="spinner" /> : <SparklesIcon />}
+            <span>{testing ? "Testing Handshake…" : "Test Connection & Probe Tools"}</span>
+          </button>
+
+          {testResult.type === "ok" && (
+            <span className="badge badge-connected" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <CheckIcon />
+              {testResult.message}
+            </span>
+          )}
+          {testResult.type === "err" && (
+            <span className="badge badge-auth" style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(220, 50, 50, 0.12)", color: "#e05555" }}>
+              <AlertTriangleIcon />
+              {testResult.message}
+            </span>
+          )}
+        </div>
+
         <button type="submit" className="btn-primary">
           Save Hindsight Settings
         </button>
