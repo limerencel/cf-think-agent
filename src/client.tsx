@@ -2124,6 +2124,14 @@ function McpServerEditor({
           </button>
           <button
             type="button"
+            className={`tab-btn ${authType === "cf_service_token" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("cf_service_token")}
+          >
+            CF Service Token
+          </button>
+          <button
+            type="button"
             className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
             style={{ flex: 1, justifyContent: "center" }}
             onClick={() => setAuthType("oauth")}
@@ -2132,6 +2140,47 @@ function McpServerEditor({
           </button>
         </div>
       </div>
+
+      {authType === "cf_service_token" && (
+        <div className="protocol-select-box" style={{ marginTop: 2, marginBottom: 4 }}>
+          <div className="form-group" style={{ marginBottom: 10 }}>
+            <label className="form-label">
+              CF-Access-Client-Id
+              <span className="form-hint">Non-expiring Cloudflare Service Token Client ID</span>
+            </label>
+            <input
+              type="text"
+              className="text-input"
+              placeholder="e.g. 123456789abcdef.access"
+              value={cfAccessClientId}
+              onChange={(e) => setCfAccessClientId(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 2 }}>
+            <label className="form-label">
+              CF-Access-Client-Secret
+              <span className="form-hint">Cloudflare Service Token Client Secret</span>
+            </label>
+            <div className="input-row">
+              <input
+                type={showCfSecret ? "text" : "password"}
+                className={showCfSecret ? "text-input" : "text-input key-masked"}
+                placeholder="Cloudflare Service Secret"
+                value={cfAccessClientSecret}
+                onChange={(e) => setCfAccessClientSecret(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setShowCfSecret(!showCfSecret)}
+                title={showCfSecret ? "Hide secret" : "Show secret"}
+              >
+                {showCfSecret ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {authType === "bearer" && (
         <div className="form-group">
