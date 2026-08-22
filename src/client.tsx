@@ -2353,6 +2353,10 @@ const PROMPT_PRESETS = [
     name: "Research Analyst",
     prompt: "Structure answers with Executive Summary, Deep Dive, Key Findings, and Actionable Next Steps. Cite relevant sources and knowledge entries.",
   },
+  {
+    name: "Memory Proactive",
+    prompt: "Actively maintain long-term memory. Whenever important decisions, user preferences, workflow habits, or system requirements are discussed, proactively retain them and weave relevant past memories into answers.",
+  },
 ];
 
 function SystemPromptEditor({

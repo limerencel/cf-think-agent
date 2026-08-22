@@ -445,19 +445,38 @@ export class Assistant extends Think<Env> {
   }
 
   override getSystemPrompt(): string {
-    const defaultPrompt = [
+    const promptParts = [
       "You are Aki's Cloudflare edge agent.",
       "Reply in the user's language (Chinese if they write Chinese).",
       "You have access to these core systems and built-in capabilities:",
       "1) Cloudflare Computer workspace — durable session files in this Durable Object (read, write, edit, ls).",
       "2) Parallel Web Search MCP — real-time live web search and URL content extraction.",
+    ];
+
+    if (this.currentHindsightConfig) {
+      promptParts.push(
+        "3) Hermes Hindsight Long-term Memory — persistent cross-session episodic & semantic memory bank."
+      );
+    }
+
+    promptParts.push(
       "",
       "System & Tool usage guidelines:",
       "- For notes, code artifacts, or working drafts created in this session: use Cloudflare workspace tools (prefer read/ls/write/edit over bash cat/ls/sed).",
-      "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering.",
-      "- Keep replies concise and helpful.",
-    ].join("\n");
+      "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering."
+    );
 
+    if (this.currentHindsightConfig) {
+      promptParts.push(
+        "- Long-term Memory: Relevant memories are automatically retrieved into <hindsight_memory_context>. Use them seamlessly to maintain continuity and respect user preferences without asking for already-known details.",
+        "- Proactive Retention: When the user shares enduring personal preferences, project architecture decisions, constraints, or requests you to remember something, proactively invoke `hindsight_retain`.",
+        "- Memory Search: Use `hindsight_recall` to explore past knowledge or `hindsight_reflect` to synthesize insights across memory graphs."
+      );
+    }
+
+    promptParts.push("- Keep replies concise and helpful.");
+
+    const defaultPrompt = promptParts.join("\n");
     let prompt = defaultPrompt;
 
     if (this.currentCustomPrompt) {
