@@ -240,47 +240,70 @@ export class Assistant extends Think<Env> {
     this.currentCustomPrompt = customPrompt?.trim() || undefined;
     this.currentPromptMode = promptMode || "append";
 
-    const hindsightConfig = ctx.body?.hindsightConfig as HindsightConfig | undefined;
+    let hindsightConfig = ctx.body?.hindsightConfig as HindsightConfig | undefined;
+    if ((!hindsightConfig || !hindsightConfig.enabled) && (this.env as any).ConvoIndex) {
+      try {
+        const stub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
+        const persisted = await stub.getHindsightConfig();
+        if (persisted?.enabled && persisted.endpoint) {
+          hindsightConfig = persisted;
+        }
+      } catch (err) {
+        console.warn("Failed to load HindsightConfig from ConvoIndex DO:", err);
+      }
+    }
+
     this.currentHindsightConfig = hindsightConfig?.enabled && hindsightConfig.endpoint ? hindsightConfig : undefined;
     this.currentMemoryContext = undefined;
 
-    // 1. Auto-Recall: Hermes-style pre-inference memory injection
-    if (this.currentHindsightConfig?.autoRecall) {
-      const userMessage = ctx.body?.userMessage as string | undefined;
-      if (userMessage?.trim()) {
-        try {
-          const bankId = this.currentHindsightConfig.bankId || this.name;
-          const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
-          const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
+    // Extract last user message from body or conversation history
+    let userMessage = ctx.body?.userMessage as string | undefined;
+    if (!userMessage?.trim() && ctx.messages && ctx.messages.length > 0) {
+      const lastUser = [...ctx.messages].reverse().find((m: any) => m.role === "user");
+      if (lastUser) {
+        userMessage =
+          typeof lastUser.content === "string"
+            ? lastUser.content
+            : Array.isArray(lastUser.content)
+            ? lastUser.content.map((c: any) => c.text || "").join(" ")
+            : "";
+      }
+    }
 
-          const recallRes = await mcpCallTool(
+    // 1. Auto-Recall: Hermes-style pre-inference memory injection
+    if (this.currentHindsightConfig?.autoRecall && userMessage?.trim()) {
+      try {
+        const bankId = this.currentHindsightConfig.bankId || this.name;
+        const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
+        const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
+
+        const recallRes = await mcpCallTool(
+          hConfig,
+          "hindsight_recall",
+          {
+            query: userMessage.trim(),
+            bank_id: bankId,
+            limit: this.currentHindsightConfig.recallTopK || 5,
+          }
+        );
+
+        if (recallRes.ok && recallRes.text && recallRes.text.trim()) {
+          this.currentMemoryContext = recallRes.text.trim();
+        } else {
+          const fallbackRes = await mcpCallTool(
             hConfig,
-            "hindsight_recall",
+            "recall",
             {
               query: userMessage.trim(),
               bank_id: bankId,
-              limit: this.currentHindsightConfig.recallTopK || 5,
             }
           );
-
-          if (recallRes.ok && recallRes.text && recallRes.text.trim()) {
-            this.currentMemoryContext = recallRes.text.trim();
-          } else {
-            const fallbackRes = await mcpCallTool(
-              hConfig,
-              "recall",
-              {
-                query: userMessage.trim(),
-                bank_id: bankId,
-              }
-            );
-            if (fallbackRes.ok && fallbackRes.text && fallbackRes.text.trim()) {
-              this.currentMemoryContext = fallbackRes.text.trim();
-            }
+          if (fallbackRes.ok && fallbackRes.text && fallbackRes.text.trim()) {
+            this.currentMemoryContext = fallbackRes.text.trim();
           }
-        } catch (err) {
-          console.warn("Hindsight auto-recall failed:", err);
         }
+      } catch (err) {
+        console.warn("Hindsight auto-recall failed:", err);
       }
     }
 
@@ -322,7 +345,16 @@ export class Assistant extends Think<Env> {
         : openai.chat(custom.modelId.trim());
     }
 
-    const mcpServers = (ctx.body?.mcpServers as McpServerConfig[] | undefined) || [];
+    let mcpServers = (ctx.body?.mcpServers as McpServerConfig[] | undefined) || [];
+    if (mcpServers.length === 0 && (this.env as any).ConvoIndex) {
+      try {
+        const stub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
+        mcpServers = await stub.listMcpServers();
+      } catch (err) {
+        console.warn("Failed to load McpServers from ConvoIndex DO:", err);
+      }
+    }
+
     const dynamicTools: ToolSet = {};
 
     for (const s of mcpServers) {
@@ -350,8 +382,8 @@ export class Assistant extends Think<Env> {
       const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
       const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
 
-      dynamicTools["hindsight_recall"] = tool({
-        description: "Search and recall long-term memories, user preferences, and facts from the Hindsight memory bank.",
+      const recallTool = tool({
+        description: "Search and recall long-term memories, user preferences, past facts, and project decisions from the persistent Hindsight memory bank. Call this tool whenever you need historical context.",
         inputSchema: z.object({
           query: z.string().describe("The memory search query or concept to recall"),
           bank_id: z.string().optional().describe("Optional memory bank ID (defaults to current session)"),
@@ -372,7 +404,7 @@ export class Assistant extends Think<Env> {
         },
       });
 
-      dynamicTools["hindsight_retain"] = tool({
+      const retainTool = tool({
         description: "Retain, save, or commit a salient fact, preference, or decision into the persistent Hindsight memory bank.",
         inputSchema: z.object({
           content: z.string().describe("The concise fact, decision, or user preference to retain"),
@@ -396,7 +428,7 @@ export class Assistant extends Think<Env> {
         },
       });
 
-      dynamicTools["hindsight_reflect"] = tool({
+      const reflectTool = tool({
         description: "Reflect and consolidate memories on a specific topic or synthesize insights across memory graphs.",
         inputSchema: z.object({
           topic: z.string().optional().describe("Topic or query to reflect upon"),
@@ -417,31 +449,38 @@ export class Assistant extends Think<Env> {
           return res.text || "Reflection complete";
         },
       });
+
+      dynamicTools["hindsight_recall"] = recallTool;
+      dynamicTools["hindsight_retain"] = retainTool;
+      dynamicTools["hindsight_reflect"] = reflectTool;
+
+      // Provide short aliases for direct tool selection
+      if (!dynamicTools["recall"]) dynamicTools["recall"] = recallTool;
+      if (!dynamicTools["retain"]) dynamicTools["retain"] = retainTool;
+      if (!dynamicTools["reflect"]) dynamicTools["reflect"] = reflectTool;
     }
 
-    if (model || Object.keys(dynamicTools).length > 0) {
-      // Pass sampling + reasoning parameters through to streamText.
-      // providerOptions.openai.reasoningEffort maps to the request body's
-      // reasoning_effort field (verified in @ai-sdk/openai internal source).
-      const turnParams = custom
-        ? {
-            ...(custom.temperature !== undefined ? { temperature: custom.temperature } : {}),
-            ...(custom.maxTokens !== undefined ? { maxOutputTokens: custom.maxTokens } : {}),
-            ...(custom.topP !== undefined ? { topP: custom.topP } : {}),
-            ...(custom.reasoningEffort && custom.reasoningEffort !== "none"
-              ? { providerOptions: { openai: { reasoningEffort: custom.reasoningEffort } } }
-              : {}),
-          }
-        : {};
+    const turnParams = custom
+      ? {
+          ...(custom.temperature !== undefined ? { temperature: custom.temperature } : {}),
+          ...(custom.maxTokens !== undefined ? { maxOutputTokens: custom.maxTokens } : {}),
+          ...(custom.topP !== undefined ? { topP: custom.topP } : {}),
+          ...(custom.reasoningEffort && custom.reasoningEffort !== "none"
+            ? { providerOptions: { openai: { reasoningEffort: custom.reasoningEffort } } }
+            : {}),
+        }
+      : {};
 
-      return {
-        ...(model ? { model } : {}),
-        ...(Object.keys(dynamicTools).length > 0
-          ? { tools: { ...this.getTools(), ...dynamicTools } }
-          : {}),
-        ...turnParams,
-      };
-    }
+    const allTools: ToolSet = {
+      ...this.getTools(),
+      ...dynamicTools,
+    };
+
+    return {
+      ...(model ? { model } : {}),
+      tools: allTools,
+      ...turnParams,
+    };
   }
 
   override getSystemPrompt(): string {
