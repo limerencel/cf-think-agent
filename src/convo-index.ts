@@ -25,7 +25,8 @@ export interface ProviderConfig {
   reasoningEffort?: "low" | "medium" | "high" | "none";
 }
 
-export type { McpServerConfig, McpToolDef };
+export type { McpServerConfig, McpToolDef, HindsightConfig } from "./mcp-types";
+import type { HindsightConfig } from "./mcp-types";
 
 const MAX_CONVOS = 30;
 
@@ -541,5 +542,63 @@ export class ConvoIndex extends Agent<Env> {
       codeVerifier: r.code_verifier as string,
       createdAt: Number(r.created_at),
     };
+  }
+
+  /* ---------------- Hindsight Memory configuration ---------------- */
+
+  @callable()
+  async getHindsightConfig(): Promise<HindsightConfig> {
+    await this.ensureTables();
+    const raw = await this.getSetting("hindsight_config");
+    if (!raw) {
+      return {
+        enabled: false,
+        endpoint: "",
+        authType: "none",
+        autoRecall: true,
+        autoRetain: true,
+        recallTopK: 5,
+      };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        enabled: !!parsed.enabled,
+        endpoint: parsed.endpoint || "",
+        authType: parsed.authType || "none",
+        bearerToken: parsed.bearerToken,
+        cfAccessClientId: parsed.cfAccessClientId,
+        cfAccessClientSecret: parsed.cfAccessClientSecret,
+        oauthClientId: parsed.oauthClientId,
+        oauthClientSecret: parsed.oauthClientSecret,
+        oauthTokens: parsed.oauthTokens,
+        bankId: parsed.bankId || undefined,
+        autoRecall: parsed.autoRecall ?? true,
+        autoRetain: parsed.autoRetain ?? true,
+        recallTopK: parsed.recallTopK || 5,
+        cachedTools: parsed.cachedTools,
+        updatedAt: parsed.updatedAt,
+      };
+    } catch {
+      return {
+        enabled: false,
+        endpoint: "",
+        authType: "none",
+        autoRecall: true,
+        autoRetain: true,
+        recallTopK: 5,
+      };
+    }
+  }
+
+  @callable()
+  async saveHindsightConfig(config: HindsightConfig): Promise<HindsightConfig> {
+    await this.ensureTables();
+    const updated: HindsightConfig = {
+      ...config,
+      updatedAt: Date.now(),
+    };
+    await this.setSetting("hindsight_config", JSON.stringify(updated));
+    return updated;
   }
 }

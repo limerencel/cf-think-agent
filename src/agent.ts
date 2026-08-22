@@ -18,7 +18,7 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 
 import { mcpCallTool } from "./mcp-client";
-import type { McpServerConfig } from "./mcp-types";
+import type { McpServerConfig, HindsightConfig } from "./mcp-types";
 
 function cleanBaseUrl(raw: string): string {
   let url = raw.trim();
@@ -198,6 +198,8 @@ export class Assistant extends Think<Env> {
 
   private currentCustomPrompt?: string;
   private currentPromptMode: "append" | "override" = "append";
+  private currentMemoryContext?: string;
+  private currentHindsightConfig?: HindsightConfig;
 
   override async onStart() {
     await super.onStart();
@@ -232,11 +234,52 @@ export class Assistant extends Think<Env> {
     return openai.chat(this.env.MODEL_ID);
   }
 
-  override beforeTurn(ctx: TurnContext): TurnConfig | void {
+  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const customPrompt = ctx.body?.customSystemPrompt as string | undefined;
     const promptMode = ctx.body?.promptMode as "append" | "override" | undefined;
     this.currentCustomPrompt = customPrompt?.trim() || undefined;
     this.currentPromptMode = promptMode || "append";
+
+    const hindsightConfig = ctx.body?.hindsightConfig as HindsightConfig | undefined;
+    this.currentHindsightConfig = hindsightConfig?.enabled && hindsightConfig.endpoint ? hindsightConfig : undefined;
+    this.currentMemoryContext = undefined;
+
+    // 1. Auto-Recall: Hermes-style pre-inference memory injection
+    if (this.currentHindsightConfig?.autoRecall) {
+      const userMessage = ctx.body?.userMessage as string | undefined;
+      if (userMessage?.trim()) {
+        try {
+          const bankId = this.currentHindsightConfig.bankId || this.name;
+          const recallRes = await mcpCallTool(
+            this.currentHindsightConfig,
+            "hindsight_recall",
+            {
+              query: userMessage.trim(),
+              bank_id: bankId,
+              limit: this.currentHindsightConfig.recallTopK || 5,
+            }
+          );
+
+          if (recallRes.ok && recallRes.text && recallRes.text.trim()) {
+            this.currentMemoryContext = recallRes.text.trim();
+          } else {
+            const fallbackRes = await mcpCallTool(
+              this.currentHindsightConfig,
+              "recall",
+              {
+                query: userMessage.trim(),
+                bank_id: bankId,
+              }
+            );
+            if (fallbackRes.ok && fallbackRes.text && fallbackRes.text.trim()) {
+              this.currentMemoryContext = fallbackRes.text.trim();
+            }
+          }
+        } catch (err) {
+          console.warn("Hindsight auto-recall failed:", err);
+        }
+      }
+    }
 
     const custom = ctx.body?.customModel as
       | {
@@ -298,6 +341,80 @@ export class Assistant extends Think<Env> {
       }
     }
 
+    // Register Hermes-style explicit Hindsight Memory tools
+    if (this.currentHindsightConfig) {
+      const hConfig = this.currentHindsightConfig;
+      const bankId = hConfig.bankId || this.name;
+
+      dynamicTools["hindsight_recall"] = tool({
+        description: "Search and recall long-term memories, user preferences, and facts from the Hindsight memory bank.",
+        inputSchema: z.object({
+          query: z.string().describe("The memory search query or concept to recall"),
+          bank_id: z.string().optional().describe("Optional memory bank ID (defaults to current session)"),
+        }),
+        execute: async (args) => {
+          const res = await mcpCallTool(hConfig, "hindsight_recall", {
+            bank_id: args.bank_id || bankId,
+            query: args.query,
+          });
+          if (!res.ok) {
+            const fallback = await mcpCallTool(hConfig, "recall", {
+              bank_id: args.bank_id || bankId,
+              query: args.query,
+            });
+            return fallback.ok ? fallback.text || "No memories found" : { error: fallback.error || res.error };
+          }
+          return res.text || "No memories found";
+        },
+      });
+
+      dynamicTools["hindsight_retain"] = tool({
+        description: "Retain, save, or commit a salient fact, preference, or decision into the persistent Hindsight memory bank.",
+        inputSchema: z.object({
+          content: z.string().describe("The concise fact, decision, or user preference to retain"),
+          bank_id: z.string().optional().describe("Optional memory bank ID (defaults to current session)"),
+        }),
+        execute: async (args) => {
+          const res = await mcpCallTool(hConfig, "hindsight_retain", {
+            bank_id: args.bank_id || bankId,
+            content: args.content,
+            timestamp: Date.now(),
+          });
+          if (!res.ok) {
+            const fallback = await mcpCallTool(hConfig, "retain", {
+              bank_id: args.bank_id || bankId,
+              content: args.content,
+              timestamp: Date.now(),
+            });
+            return fallback.ok ? fallback.text || "Memory retained" : { error: fallback.error || res.error };
+          }
+          return res.text || "Memory retained successfully";
+        },
+      });
+
+      dynamicTools["hindsight_reflect"] = tool({
+        description: "Reflect and consolidate memories on a specific topic or synthesize insights across memory graphs.",
+        inputSchema: z.object({
+          topic: z.string().optional().describe("Topic or query to reflect upon"),
+          bank_id: z.string().optional().describe("Optional memory bank ID"),
+        }),
+        execute: async (args) => {
+          const res = await mcpCallTool(hConfig, "hindsight_reflect", {
+            bank_id: args.bank_id || bankId,
+            topic: args.topic,
+          });
+          if (!res.ok) {
+            const fallback = await mcpCallTool(hConfig, "reflect", {
+              bank_id: args.bank_id || bankId,
+              topic: args.topic,
+            });
+            return fallback.ok ? fallback.text || "Reflection complete" : { error: fallback.error || res.error };
+          }
+          return res.text || "Reflection complete";
+        },
+      });
+    }
+
     if (model || Object.keys(dynamicTools).length > 0) {
       // Pass sampling + reasoning parameters through to streamText.
       // providerOptions.openai.reasoningEffort maps to the request body's
@@ -337,14 +454,52 @@ export class Assistant extends Think<Env> {
       "- Keep replies concise and helpful.",
     ].join("\n");
 
+    let prompt = defaultPrompt;
+
     if (this.currentCustomPrompt) {
-      if (this.currentPromptMode === "override") {
-        return this.currentCustomPrompt;
-      }
-      return `${defaultPrompt}\n\n[Custom User Instructions / Persona]\n${this.currentCustomPrompt}`;
+      prompt =
+        this.currentPromptMode === "override"
+          ? this.currentCustomPrompt
+          : `${defaultPrompt}\n\n[Custom User Instructions / Persona]\n${this.currentCustomPrompt}`;
     }
 
-    return defaultPrompt;
+    if (this.currentMemoryContext) {
+      prompt += `\n\n<hindsight_memory_context>\n[Active Hindsight Long-term Memories]\n${this.currentMemoryContext}\n</hindsight_memory_context>`;
+    }
+
+    return prompt;
+  }
+
+  @callable()
+  async autoRetainTurn(payload: {
+    userMessage: string;
+    assistantResponse: string;
+    hindsightConfig?: HindsightConfig;
+  }): Promise<{ ok: boolean; message?: string }> {
+    const config = payload.hindsightConfig || this.currentHindsightConfig;
+    if (!config?.enabled || !config?.endpoint || !config?.autoRetain) {
+      return { ok: true, message: "Auto-retain not enabled" };
+    }
+    const bankId = config.bankId || this.name;
+    const content = `User: ${payload.userMessage}\nAssistant: ${payload.assistantResponse}`;
+
+    let res = await mcpCallTool(config, "hindsight_retain", {
+      bank_id: bankId,
+      content,
+      user: payload.userMessage,
+      assistant: payload.assistantResponse,
+      timestamp: Date.now(),
+    });
+    if (!res.ok) {
+      res = await mcpCallTool(config, "retain", {
+        bank_id: bankId,
+        content,
+        user: payload.userMessage,
+        assistant: payload.assistantResponse,
+        timestamp: Date.now(),
+      });
+    }
+    return { ok: res.ok, message: res.text || res.error };
   }
 
   override getTools(): ToolSet {

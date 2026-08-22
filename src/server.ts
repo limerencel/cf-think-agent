@@ -610,6 +610,75 @@ export default {
       }
     }
 
+    // Hindsight Native Memory REST API (backed by ConvoIndex DO SQLite)
+    // GET  /api/hindsight/config -> { ok: true, config: HindsightConfig }
+    // POST /api/hindsight/config -> { config: HindsightConfig } -> { ok: true, config }
+    // POST /api/hindsight/test   -> { endpoint, authType, bearerToken?, ... } -> { ok: true, tools: McpToolDef[], toolNames: string[], hasRecall: boolean, hasRetain: boolean }
+    if (url.pathname.startsWith("/api/hindsight")) {
+      const stub = env.ConvoIndex.get(env.ConvoIndex.idFromName(CONVO_INDEX));
+
+      if (url.pathname === "/api/hindsight/config") {
+        if (request.method === "GET") {
+          const config = await stub.getHindsightConfig();
+          return Response.json({ ok: true, config });
+        }
+        if (request.method === "POST") {
+          let body: any = {};
+          try {
+            body = await request.json();
+          } catch {
+            return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+          }
+          const saved = await stub.saveHindsightConfig(body);
+          return Response.json({ ok: true, config: saved });
+        }
+        return Response.json({ ok: false, error: "method not allowed" }, { status: 405 });
+      }
+
+      if (url.pathname === "/api/hindsight/test" && request.method === "POST") {
+        try {
+          let body: any = {};
+          try {
+            body = await request.json();
+          } catch {
+            return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+          }
+
+          const endpoint = body?.endpoint?.trim();
+          if (!endpoint) {
+            return Response.json({ ok: false, error: "endpoint is required" }, { status: 400 });
+          }
+
+          const tools = await mcpListTools({
+            endpoint,
+            authType: body.authType || "bearer",
+            bearerToken: body.bearerToken?.trim(),
+            cfAccessClientId: body.cfAccessClientId?.trim(),
+            cfAccessClientSecret: body.cfAccessClientSecret?.trim(),
+            oauthTokens: body.oauthTokens,
+          });
+
+          const toolNames = tools.map((t) => t.name.toLowerCase());
+          const hasRecall = toolNames.some((n) => n.includes("recall") || n.includes("query") || n.includes("search") || n.includes("search_and_execute"));
+          const hasRetain = toolNames.some((n) => n.includes("retain") || n.includes("store") || n.includes("save") || n.includes("insert") || n.includes("search_and_execute"));
+
+          return Response.json({
+            ok: true,
+            tools,
+            toolNames: tools.map((t) => t.name),
+            hasRecall,
+            hasRetain,
+            message: `Connected to Hindsight MCP! Discovered ${tools.length} tool${tools.length === 1 ? "" : "s"}.`,
+          });
+        } catch (err: any) {
+          return Response.json(
+            { ok: false, error: err?.message || "Failed to connect to Hindsight endpoint" },
+            { status: 500 }
+          );
+        }
+      }
+    }
+
     return (
       (await routeAgentRequest(request, env)) ??
       new Response("cf-think-agent", {

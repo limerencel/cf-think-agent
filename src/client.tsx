@@ -6,9 +6,9 @@ import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import type { McpServerConfig, McpToolDef, McpAuthType } from "./mcp-types";
+import type { McpServerConfig, McpToolDef, McpAuthType, HindsightConfig } from "./mcp-types";
 
-export type { McpServerConfig, McpToolDef, McpAuthType };
+export type { McpServerConfig, McpToolDef, McpAuthType, HindsightConfig };
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -372,6 +372,26 @@ async function cloudStartMcpOAuth(
     throw new Error(data.error || `HTTP ${res.status}`);
   }
   return data;
+}
+
+async function cloudGetHindsightConfig(): Promise<HindsightConfig> {
+  const res = await fetch("/api/hindsight/config");
+  if (!res.ok) throw new Error(`cloud get hindsight config ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; config: HindsightConfig };
+  if (!data.ok) throw new Error("cloud get hindsight config !ok");
+  return data.config;
+}
+
+async function cloudSaveHindsightConfig(config: HindsightConfig): Promise<HindsightConfig> {
+  const res = await fetch("/api/hindsight/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error(`cloud save hindsight config ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; config: HindsightConfig };
+  if (!data.ok) throw new Error("cloud save hindsight config !ok");
+  return data.config;
 }
 
 function newId(): string {
@@ -2471,6 +2491,343 @@ function SystemPromptEditor({
   );
 }
 
+/* ---------------- Hindsight Memory Editor ---------------- */
+
+function HindsightSettingsEditor({
+  config,
+  onSave,
+}: {
+  config: HindsightConfig;
+  onSave: (updated: HindsightConfig) => void;
+}) {
+  const [enabled, setEnabled] = useState(config.enabled);
+  const [endpoint, setEndpoint] = useState(config.endpoint || "");
+  const [authType, setAuthType] = useState<McpAuthType>(config.authType || "none");
+  const [bearerToken, setBearerToken] = useState(config.bearerToken || "");
+  const [cfAccessClientId, setCfAccessClientId] = useState(config.cfAccessClientId || "");
+  const [cfAccessClientSecret, setCfAccessClientSecret] = useState(config.cfAccessClientSecret || "");
+  const [bankId, setBankId] = useState(config.bankId || "");
+  const [autoRecall, setAutoRecall] = useState(config.autoRecall ?? true);
+  const [autoRetain, setAutoRetain] = useState(config.autoRetain ?? true);
+  const [recallTopK, setRecallTopK] = useState(config.recallTopK || 5);
+  const [showToken, setShowToken] = useState(false);
+  const [showCfSecret, setShowCfSecret] = useState(false);
+
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    type: "idle" | "ok" | "err";
+    message: string;
+    tools?: McpToolDef[];
+    hasRecall?: boolean;
+    hasRetain?: boolean;
+  }>({ type: "idle", message: "" });
+
+  const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const handleTestConnection = async () => {
+    if (!endpoint.trim()) {
+      setTestResult({ type: "err", message: "Please enter an MCP Endpoint URL first." });
+      return;
+    }
+    setTesting(true);
+    setTestResult({ type: "idle", message: "" });
+    try {
+      const res = await fetch("/api/hindsight/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: endpoint.trim(),
+          authType,
+          bearerToken: bearerToken.trim() || undefined,
+          cfAccessClientId: cfAccessClientId.trim() || undefined,
+          cfAccessClientSecret: cfAccessClientSecret.trim() || undefined,
+          oauthTokens: config.oauthTokens,
+        }),
+      });
+      const data = (await res.json()) as any;
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      setTestResult({
+        type: "ok",
+        message: data.message || `Connected to Hindsight MCP! Discovered ${data.tools?.length || 0} tools.`,
+        tools: data.tools,
+        hasRecall: data.hasRecall,
+        hasRetain: data.hasRetain,
+      });
+    } catch (err: any) {
+      setTestResult({ type: "err", message: err.message || String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated: HindsightConfig = {
+      ...config,
+      enabled,
+      endpoint: endpoint.trim(),
+      authType,
+      bearerToken: bearerToken.trim() || undefined,
+      cfAccessClientId: cfAccessClientId.trim() || undefined,
+      cfAccessClientSecret: cfAccessClientSecret.trim() || undefined,
+      bankId: bankId.trim() || undefined,
+      autoRecall,
+      autoRetain,
+      recallTopK: Number(recallTopK) || 5,
+      cachedTools: testResult.tools || config.cachedTools,
+      updatedAt: Date.now(),
+    };
+    onSave(updated);
+    setStatusMsg({ type: "ok", text: "Hindsight memory settings saved successfully!" });
+    setTimeout(() => setStatusMsg(null), 3000);
+  };
+
+  return (
+    <form className="form-grid" onSubmit={handleSubmit} autoComplete="off">
+      <div className="modal-section" style={{ borderBottom: "none", paddingBottom: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div>
+            <h3 className="modal-section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <BrainIcon />
+              <span>Hermes Hindsight Memory</span>
+            </h3>
+            <p className="modal-section-desc">
+              Long-term persistent semantic memory with pre-inference recall and post-turn background consolidation.
+            </p>
+          </div>
+          <label className="toggle-switch" title={enabled ? "Disable Hindsight Memory" : "Enable Hindsight Memory"}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span className="toggle-slider" />
+          </label>
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">
+          Hindsight MCP Endpoint URL
+          <span className="form-hint">Streamable HTTP / SSE MCP URL (e.g. Cloudflare MCP portal or Hindsight worker)</span>
+        </label>
+        <input
+          type="text"
+          className="text-input"
+          placeholder="https://mcps.itsuhiro.com/mcp?codemode=search_and_execute"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          required={enabled}
+        />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">
+          Authentication Method
+          <span className="form-hint">Authentication required by your Hindsight MCP endpoint</span>
+        </label>
+        <div className="segmented-nav" style={{ width: "100%", justifyContent: "space-between" }}>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "none" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("none")}
+          >
+            No Auth
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "bearer" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("bearer")}
+          >
+            Bearer Token
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "cf_service_token" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("cf_service_token")}
+          >
+            CF Service Token
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => setAuthType("oauth")}
+          >
+            OAuth 2.0
+          </button>
+        </div>
+      </div>
+
+      {authType === "bearer" && (
+        <div className="form-group">
+          <label className="form-label">
+            Bearer Token / API Key
+            <span className="form-hint">Passed in Authorization: Bearer header</span>
+          </label>
+          <div className="input-row">
+            <input
+              type={showToken ? "text" : "password"}
+              className={showToken ? "text-input" : "text-input key-masked"}
+              placeholder="sk-... or secret token"
+              value={bearerToken}
+              onChange={(e) => setBearerToken(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => setShowToken(!showToken)}
+              title={showToken ? "Hide token" : "Show token"}
+            >
+              {showToken ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {authType === "cf_service_token" && (
+        <div className="protocol-select-box" style={{ marginTop: 2, marginBottom: 4 }}>
+          <div className="form-group" style={{ marginBottom: 10 }}>
+            <label className="form-label">
+              CF-Access-Client-Id
+              <span className="form-hint">Cloudflare Access Service Token Client ID</span>
+            </label>
+            <input
+              type="text"
+              className="text-input"
+              placeholder="e.g. 13dd16844ef8...access"
+              value={cfAccessClientId}
+              onChange={(e) => setCfAccessClientId(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 2 }}>
+            <label className="form-label">
+              CF-Access-Client-Secret
+              <span className="form-hint">Cloudflare Access Service Token Client Secret</span>
+            </label>
+            <div className="input-row">
+              <input
+                type={showCfSecret ? "text" : "password"}
+                className={showCfSecret ? "text-input" : "text-input key-masked"}
+                placeholder="Cloudflare Service Secret"
+                value={cfAccessClientSecret}
+                onChange={(e) => setCfAccessClientSecret(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setShowCfSecret(!showCfSecret)}
+                title={showCfSecret ? "Hide secret" : "Show secret"}
+              >
+                {showCfSecret ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Bank ID & Scope */}
+      <div className="form-group">
+        <label className="form-label">
+          Memory Bank ID / Scope (Optional)
+          <span className="form-hint">Leave blank to automatically isolate memories per conversation ID, or set a shared name (e.g. <code>global</code>)</span>
+        </label>
+        <input
+          type="text"
+          className="text-input"
+          placeholder="e.g. global (or leave blank for per-chat isolation)"
+          value={bankId}
+          onChange={(e) => setBankId(e.target.value)}
+        />
+      </div>
+
+      {/* Hermes Dual-Loop Controls */}
+      <div className="modal-section" style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+        <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", margin: "0 0 10px" }}>
+          Hermes Dual-Loop Execution Controls
+        </h4>
+
+        <div className="protocol-select-box" style={{ marginBottom: 12 }}>
+          <label className="checkbox-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>Pre-Inference Auto-Recall</span>
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "2px 0 0" }}>
+                Automatically retrieves relevant memories before the model begins reasoning and injects them into the system prompt.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={autoRecall}
+              onChange={(e) => setAutoRecall(e.target.checked)}
+            />
+          </label>
+        </div>
+
+        <div className="protocol-select-box" style={{ marginBottom: 12 }}>
+          <label className="checkbox-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>Post-Turn Auto-Retain & Consolidation</span>
+              <p style={{ fontSize: 12, color: "var(--muted)", margin: "2px 0 0" }}>
+                Asynchronously commits conversation exchanges to Hindsight in the background after each answer (zero user latency).
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={autoRetain}
+              onChange={(e) => setAutoRetain(e.target.checked)}
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* Live Test & Diagnostics */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={handleTestConnection}
+          disabled={testing || !endpoint.trim()}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          {testing ? <span className="spinner" /> : <SparklesIcon />}
+          <span>{testing ? "Testing Handshake…" : "Test Connection & Probe Tools"}</span>
+        </button>
+
+        {testResult.type === "ok" && (
+          <span className="badge badge-connected" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <CheckIcon />
+            {testResult.message}
+          </span>
+        )}
+        {testResult.type === "err" && (
+          <span className="badge badge-auth" style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(220, 50, 50, 0.12)", color: "#e05555" }}>
+            <AlertTriangleIcon />
+            {testResult.message}
+          </span>
+        )}
+      </div>
+
+      {statusMsg && (
+        <div className={`banner-msg ${statusMsg.type}`}>
+          {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
+          <span>{statusMsg.text}</span>
+        </div>
+      )}
+
+      <div className="form-actions" style={{ marginTop: 12 }}>
+        <button type="submit" className="btn-primary">
+          Save Hindsight Settings
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /* ---------------- Modular Tabbed Settings Modal ---------------- */
 
 function SettingsModal({
@@ -2484,6 +2841,8 @@ function SettingsModal({
   onSelectActiveProvider,
   mcpServers,
   onSaveMcpServers,
+  hindsightConfig,
+  onSaveHindsightConfig,
   customSystemPrompt,
   systemPromptMode,
   onSaveSystemPrompt,
@@ -2499,12 +2858,14 @@ function SettingsModal({
   onSelectActiveProvider: (id: string) => void;
   mcpServers: McpServerConfig[];
   onSaveMcpServers: (servers: McpServerConfig[]) => void;
+  hindsightConfig: HindsightConfig;
+  onSaveHindsightConfig: (config: HindsightConfig) => void;
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
   onSaveSystemPrompt: (prompt: string, mode: "append" | "override") => void;
   convosCount: number;
 }) {
-  const [activeTab, setActiveTab] = useState<"general" | "models" | "prompt" | "tools" | "about">("models");
+  const [activeTab, setActiveTab] = useState<"general" | "models" | "memory" | "prompt" | "tools" | "about">("models");
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [expandedMcpId, setExpandedMcpId] = useState<string | null>(null);
@@ -2665,6 +3026,15 @@ function SettingsModal({
               <SparklesIcon />
               <span>Providers</span>
               <span className="tab-count">{providers.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`tab-btn ${activeTab === "memory" ? "active" : ""}`}
+              onClick={() => setActiveTab("memory")}
+            >
+              <BrainIcon />
+              <span>Memory</span>
+              {hindsightConfig?.enabled && <span className="tab-count">Active</span>}
             </button>
             <button
               type="button"
@@ -2897,6 +3267,14 @@ function SettingsModal({
                 })}
               </div>
             </>
+          )}
+
+          {/* TAB: HINDSIGHT MEMORY */}
+          {activeTab === "memory" && (
+            <HindsightSettingsEditor
+              config={hindsightConfig}
+              onSave={onSaveHindsightConfig}
+            />
           )}
 
           {/* TAB 3: SYSTEM PROMPT */}
@@ -3501,6 +3879,7 @@ function Chat({
   onOpenSettings,
   onUpdateProviderReasoningEffort,
   mcpServers,
+  hindsightConfig,
   customSystemPrompt,
   systemPromptMode,
   onTriggerWorkspaceRefresh,
@@ -3513,18 +3892,22 @@ function Chat({
   onOpenSettings: () => void;
   onUpdateProviderReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
   mcpServers: McpServerConfig[];
+  hindsightConfig: HindsightConfig;
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
   onTriggerWorkspaceRefresh?: () => void;
 }) {
   const agent = useAgent({ agent: "Assistant", name: convoId });
   const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const lastSentUserTextRef = useRef<string>("");
 
   const { messages, sendMessage, status, error, regenerate, clearError, connectionError } = useAgentChat({
     agent,
     body: () => ({
       providerId: activeProvider?.id,
       mcpServers,
+      hindsightConfig,
+      userMessage: lastSentUserTextRef.current,
       customSystemPrompt,
       promptMode: systemPromptMode,
       customModel:
@@ -3563,9 +3946,30 @@ function Chat({
         turnStartTimeRef.current = null;
       }
       onTriggerWorkspaceRefresh?.();
+
+      // Hermes Post-Turn Auto-Retain: Asynchronously retain turn in background
+      if (hindsightConfig?.enabled && hindsightConfig.autoRetain) {
+        const userMsgs = messages.filter((m) => m.role === "user");
+        const asstMsgs = messages.filter((m) => m.role === "assistant");
+        const lastUser = userMsgs[userMsgs.length - 1];
+        const lastAsst = asstMsgs[asstMsgs.length - 1];
+        if (lastUser && lastAsst) {
+          const userText = textOf(lastUser);
+          const asstText = textOf(lastAsst);
+          if (userText && asstText) {
+            (agent as any)
+              .autoRetainTurn({
+                userMessage: userText,
+                assistantResponse: asstText,
+                hindsightConfig,
+              })
+              .catch((err: any) => console.warn("Hindsight auto-retain failed:", err));
+          }
+        }
+      }
     }
     prevStatusRef.current = status;
-  }, [status, messages, onTriggerWorkspaceRefresh]);
+  }, [status, messages, onTriggerWorkspaceRefresh, hindsightConfig, agent]);
 
   const [draft, setDraft] = useState("");
   const busy = status === "submitted" || status === "streaming";
@@ -3588,6 +3992,7 @@ function Chat({
       return;
     }
     turnStartTimeRef.current = Date.now();
+    lastSentUserTextRef.current = text;
     setDismissedError(null);
     clearError?.();
     if (!titled.current) {
@@ -3779,6 +4184,16 @@ function AppInner() {
   // Settings Modal State
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Hindsight Memory State (Cloud DO source of truth)
+  const [hindsightConfig, setHindsightConfig] = useState<HindsightConfig>({
+    enabled: false,
+    endpoint: "",
+    authType: "none",
+    autoRecall: true,
+    autoRetain: true,
+    recallTopK: 5,
+  });
+
   // Right Workspace Drawer State
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceFileCount, setWorkspaceFileCount] = useState(0);
@@ -3837,6 +4252,14 @@ function AppInner() {
         if (!cancelled && servers.length) {
           setMcpServers(servers);
           saveLocalMcpServers(servers);
+        }
+      })
+      .catch(() => {});
+
+    cloudGetHindsightConfig()
+      .then((cfg) => {
+        if (!cancelled && cfg) {
+          setHindsightConfig(cfg);
         }
       })
       .catch(() => {});
@@ -3908,6 +4331,16 @@ function AppInner() {
     cloudSaveAllMcpServers(nextServers).catch((err) => {
       console.error("Failed to sync MCP servers with cloud:", err);
     });
+  };
+
+  const handleSaveHindsightConfig = async (nextConfig: HindsightConfig) => {
+    setHindsightConfig(nextConfig);
+    try {
+      const saved = await cloudSaveHindsightConfig(nextConfig);
+      setHindsightConfig(saved);
+    } catch (err) {
+      console.error("Failed to sync Hindsight config with cloud:", err);
+    }
   };
 
   const handleSaveSystemPrompt = async (prompt: string, mode: "append" | "override") => {
@@ -4160,6 +4593,7 @@ function AppInner() {
           onOpenSettings={() => setSettingsOpen(true)}
           onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
           mcpServers={mcpServers}
+          hindsightConfig={hindsightConfig}
           customSystemPrompt={customSystemPrompt}
           systemPromptMode={systemPromptMode}
           onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
@@ -4186,6 +4620,8 @@ function AppInner() {
         onSelectActiveProvider={handleSelectActiveProvider}
         mcpServers={mcpServers}
         onSaveMcpServers={handleSaveMcpServers}
+        hindsightConfig={hindsightConfig}
+        onSaveHindsightConfig={handleSaveHindsightConfig}
         customSystemPrompt={customSystemPrompt}
         systemPromptMode={systemPromptMode}
         onSaveSystemPrompt={handleSaveSystemPrompt}
