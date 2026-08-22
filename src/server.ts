@@ -228,10 +228,20 @@ export default {
 
         if (!upstreamRes.ok) {
           const errText = await upstreamRes.text().catch(() => "");
+          let parsedJson: any = null;
+          try {
+            parsedJson = JSON.parse(errText);
+          } catch {
+            /* ignore */
+          }
           return Response.json(
             {
               ok: false,
-              error: `Upstream error (${upstreamRes.status}): ${errText.slice(0, 200) || upstreamRes.statusText}`,
+              statusCode: upstreamRes.status,
+              statusText: upstreamRes.statusText,
+              error: parsedJson?.error?.message || parsedJson?.message || errText || `Upstream error (${upstreamRes.status}): ${upstreamRes.statusText}`,
+              rawResponse: parsedJson || errText || upstreamRes.statusText,
+              url: targetUrl,
             },
             { status: upstreamRes.status }
           );
@@ -259,7 +269,19 @@ export default {
 
         return Response.json({ ok: true, models: uniqueModels });
       } catch (err: any) {
-        return Response.json({ ok: false, error: err?.message || "Failed to fetch models" }, { status: 500 });
+        return Response.json(
+          {
+            ok: false,
+            statusCode: 500,
+            error: err?.message || "Failed to fetch models",
+            rawResponse: {
+              name: err?.name,
+              message: err?.message,
+              stack: err?.stack,
+            },
+          },
+          { status: 500 }
+        );
       }
     }
 

@@ -1590,9 +1590,18 @@ function ProviderEditor({
           apiKey: apiKey.trim() || undefined,
         }),
       });
-      const data = (await res.json()) as { ok: boolean; models?: string[]; error?: string };
+      const data = (await res.json()) as {
+        ok: boolean;
+        models?: string[];
+        error?: string;
+        statusCode?: number;
+        statusText?: string;
+        rawResponse?: any;
+      };
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
+        const rawBody = data.rawResponse ? (typeof data.rawResponse === "object" ? JSON.stringify(data.rawResponse) : String(data.rawResponse)) : "";
+        const codePrefix = data.statusCode || res.status;
+        throw new Error(`[HTTP ${codePrefix}] ${data.error || "Failed to load models"}${rawBody && rawBody !== data.error ? ` — ${rawBody}` : ""}`);
       }
       const list = data.models ?? [];
       setCachedModels(list);
@@ -3247,6 +3256,138 @@ const HINTS = [
 
 /* ---------------- Diagnostic Error Card ---------------- */
 
+interface ParsedBackendError {
+  statusCode: number | string;
+  statusCategory: string;
+  primaryReason: string;
+  errorType?: string;
+  errorCode?: string | number;
+  param?: string;
+  endpointUrl: string;
+  modelId: string;
+  providerName: string;
+  timestamp: string;
+  rawJson: Record<string, unknown> | null;
+  rawOutput: string;
+}
+
+function parseBackendError(
+  rawError: string,
+  activeProvider?: ProviderConfig
+): ParsedBackendError {
+  let explicitStatus: number | string | null = null;
+  let rawJson: Record<string, unknown> | null = null;
+
+  // 1. Try to extract JSON from rawError
+  const jsonMatch = rawError.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (typeof parsed === "object" && parsed !== null) {
+        rawJson = parsed;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 2. Extract HTTP status code from text or JSON
+  if (rawJson) {
+    if ((rawJson as any).status) explicitStatus = (rawJson as any).status;
+    else if ((rawJson as any).statusCode) explicitStatus = (rawJson as any).statusCode;
+    else if ((rawJson as any).error && typeof (rawJson as any).error === "object" && (rawJson as any).error.code && typeof (rawJson as any).error.code === "number") {
+      explicitStatus = (rawJson as any).error.code;
+    }
+  }
+
+  if (!explicitStatus) {
+    const statusMatch = rawError.match(/\b([45]\d{2})\b/);
+    if (statusMatch) {
+      explicitStatus = parseInt(statusMatch[1], 10);
+    }
+  }
+
+  const statusCode = explicitStatus || (rawError.toLowerCase().includes("websocket") ? "WS_DISCONNECT" : "ERROR");
+
+  let statusCategory = "Request Failed";
+  if (statusCode === 400) statusCategory = "Bad Request (Invalid parameters / model name / context limit)";
+  else if (statusCode === 401) statusCategory = "Unauthorized (Invalid or missing API key)";
+  else if (statusCode === 403) statusCategory = "Forbidden (Permission denied / Country blocked)";
+  else if (statusCode === 404) statusCategory = "Not Found (Model ID not found on endpoint / invalid path)";
+  else if (statusCode === 422) statusCategory = "Unprocessable Entity (Schema / body validation error)";
+  else if (statusCode === 429) statusCategory = "Too Many Requests (Rate limited or quota exhausted)";
+  else if (statusCode === 500) statusCategory = "Internal Server Error (Upstream provider crashed)";
+  else if (statusCode === 502) statusCategory = "Bad Gateway (Upstream endpoint unreachable / proxy error)";
+  else if (statusCode === 503) statusCategory = "Service Unavailable (Model overloaded / under maintenance)";
+  else if (statusCode === 504) statusCategory = "Gateway Timeout (Upstream inference timed out)";
+  else if (statusCode === 524) statusCategory = "Cloudflare Timeout (Inference took too long to first token)";
+  else if (statusCode === "WS_DISCONNECT") statusCategory = "WebSocket Disconnected";
+
+  let primaryReason = "";
+  let errorType = "";
+  let errorCode: string | number | undefined = undefined;
+  let param: string | undefined = undefined;
+
+  if (rawJson) {
+    const errSub = (rawJson.error || rawJson) as any;
+    if (typeof errSub === "object" && errSub !== null) {
+      primaryReason = errSub.message || errSub.msg || errSub.detail || errSub.error || "";
+      errorType = errSub.type || "";
+      errorCode = errSub.code || "";
+      param = errSub.param || "";
+    } else if (typeof errSub === "string") {
+      primaryReason = errSub;
+    }
+  }
+
+  if (!primaryReason) {
+    primaryReason = rawError
+      .replace(/^Failed to process request:\s*/i, "")
+      .replace(/^Upstream error\s*(\(\d+\))?:\s*/i, "")
+      .trim() || "An unexpected error occurred during model inference.";
+  }
+
+  const endpointUrl = activeProvider?.endpoint || (activeProvider?.id === "cf-default" ? "Cloudflare AI Gateway (AIG_BASE_URL)" : "Default Endpoint");
+  const modelId = activeProvider?.selectedModel || "deepseek-v4-flash";
+  const providerName = activeProvider?.name || "Configured Provider";
+  const protocol = activeProvider?.useResponseApi ? "openai.responses (/responses)" : "openai.chat (/chat/completions)";
+
+  const completeJson = rawJson || {
+    statusCode,
+    statusCategory,
+    error: {
+      message: primaryReason,
+      type: errorType || undefined,
+      code: errorCode || undefined,
+      param: param || undefined,
+    },
+    target: {
+      provider: providerName,
+      model: modelId,
+      endpoint: endpointUrl,
+      protocol,
+    },
+    raw: rawError,
+  };
+
+  const rawOutput = JSON.stringify(completeJson, null, 2);
+
+  return {
+    statusCode,
+    statusCategory,
+    primaryReason,
+    errorType: errorType || undefined,
+    errorCode: errorCode || undefined,
+    param: param || undefined,
+    endpointUrl,
+    modelId,
+    providerName,
+    timestamp: new Date().toISOString(),
+    rawJson: completeJson,
+    rawOutput,
+  };
+}
+
 function ChatErrorCard({
   rawError,
   activeProvider,
@@ -3262,88 +3403,11 @@ function ChatErrorCard({
 }) {
   const [copied, setCopied] = useState(false);
 
-  const errLower = rawError.toLowerCase();
-  let category = "LLM API Error";
-  let badge = "API Error";
-  let title = "Model Request Failed";
-  let explanation = "The upstream model service returned an unexpected response. Check your model settings or inspect the diagnostic log below.";
-
-  const providerName = activeProvider?.name || "Configured Provider";
-  const modelId = activeProvider?.selectedModel || "Unknown Model";
-  const endpoint = activeProvider?.endpoint || "(Worker Default)";
-
-  if (
-    errLower.includes("401") ||
-    errLower.includes("unauthorized") ||
-    errLower.includes("invalid_api_key") ||
-    errLower.includes("authentication")
-  ) {
-    category = "Authentication (401)";
-    badge = "Auth Failed";
-    title = "Authentication Failed";
-    explanation = `The API key for provider [${providerName}] is invalid or expired. Please update your key in Settings.`;
-  } else if (
-    errLower.includes("404") ||
-    errLower.includes("not found") ||
-    errLower.includes("responsesbatch") ||
-    errLower.includes("responses")
-  ) {
-    category = "Protocol / Endpoint Mismatch (404)";
-    badge = "404 Not Found";
-    title = "Endpoint Not Found / Protocol Mismatch";
-    explanation = activeProvider?.useResponseApi
-      ? `OpenAI Response API is currently enabled, but the upstream endpoint (${endpoint}) may only support standard /v1/chat/completions. Try unchecking "Use OpenAI Response Protocol" in Settings.`
-      : `Could not locate the model endpoint (${endpoint}). Verify your Base URL format (e.g. /v1 suffix) and ensure model ID [${modelId}] is correct.`;
-  } else if (
-    errLower.includes("429") ||
-    errLower.includes("rate limit") ||
-    errLower.includes("quota") ||
-    errLower.includes("insufficient")
-  ) {
-    category = "Rate Limit / Quota (429)";
-    badge = "Rate Limited";
-    title = "Rate Limit or Quota Exceeded";
-    explanation = "The upstream provider returned rate limit (429) or insufficient quota. Please wait a moment or check your account balance.";
-  } else if (
-    errLower.includes("tool") ||
-    errLower.includes("function") ||
-    errLower.includes("schema")
-  ) {
-    category = "Tool Calling Incompatible";
-    badge = "Tools Unsupported";
-    title = "Model Incompatible with Tool Calling";
-    explanation = `Model [${modelId}] does not seem to support Function Calling / Tools required for GBrain and Workspace operations. Consider switching to DeepSeek-V3/R1, GPT-4o, or Claude 3.5.`;
-  } else if (
-    errLower.includes("websocket") ||
-    errLower.includes("connection") ||
-    errLower.includes("network")
-  ) {
-    category = "Network / WebSocket";
-    badge = "Disconnected";
-    title = "Edge Connection Interrupted";
-    explanation = "Realtime connection to the Cloudflare Agent was interrupted. Please check your network or refresh the page.";
-  }
-
-  const logPayload = JSON.stringify(
-    {
-      timestamp: new Date().toISOString(),
-      category,
-      provider: {
-        id: activeProvider?.id || "none",
-        name: providerName,
-        endpoint,
-        model: modelId,
-        protocol: activeProvider?.useResponseApi ? "openai.responses (/responses)" : "openai.chat (/chat/completions)",
-      },
-      error: rawError,
-    },
-    null,
-    2
-  );
+  const parsed = parseBackendError(rawError, activeProvider);
 
   const handleCopy = () => {
     try {
-      navigator.clipboard.writeText(logPayload);
+      navigator.clipboard.writeText(parsed.rawOutput);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -3352,55 +3416,76 @@ function ChatErrorCard({
   };
 
   return (
-    <div className="chat-error-card">
+    <div className="chat-error-card" role="alert">
+      {/* Header with HTTP Status & Target Metadata */}
       <div className="chat-error-head">
         <div className="chat-error-title-row">
           <div className="chat-error-icon">
             <AlertTriangleIcon />
           </div>
-          <span className="chat-error-title">{title}</span>
-          <span className="chat-error-badge">{badge}</span>
+          <span className="chat-error-http-badge">
+            {typeof parsed.statusCode === "number" ? `HTTP ${parsed.statusCode}` : parsed.statusCode}
+          </span>
+          <span className="chat-error-category">{parsed.statusCategory}</span>
         </div>
-        <button type="button" className="chat-error-close" onClick={onDismiss} title="Dismiss">
+        <button type="button" className="chat-error-close" onClick={onDismiss} title="Dismiss error">
           <XIcon />
         </button>
       </div>
 
-      <p className="chat-error-desc">{explanation}</p>
+      {/* Target Metadata Pills */}
+      <div className="chat-error-meta-tags">
+        <span className="chat-error-meta-tag">
+          Provider: <strong>{parsed.providerName}</strong>
+        </span>
+        <span className="chat-error-meta-tag">
+          Model: <code>{parsed.modelId}</code>
+        </span>
+        {parsed.endpointUrl && (
+          <span className="chat-error-meta-tag endpoint-tag" title={parsed.endpointUrl}>
+            Endpoint: <code>{parsed.endpointUrl}</code>
+          </span>
+        )}
+      </div>
 
+      {/* Exact Error Reason Box */}
+      <div className="chat-error-reason-box">
+        <div className="chat-error-reason-label">Exact Error Reason:</div>
+        <div className="chat-error-reason-text">{parsed.primaryReason}</div>
+        {(parsed.errorType || parsed.errorCode || parsed.param) && (
+          <div className="chat-error-reason-extra">
+            {parsed.errorType && <span>Type: <code>{parsed.errorType}</code></span>}
+            {parsed.errorCode && <span>Code: <code>{String(parsed.errorCode)}</code></span>}
+            {parsed.param && <span>Param: <code>{parsed.param}</code></span>}
+          </div>
+        )}
+      </div>
+
+      {/* Direct Backend Response / Raw JSON output */}
+      <div className="chat-error-json-card">
+        <div className="chat-error-json-head">
+          <span className="chat-error-json-title">Backend Response (Raw JSON Payload)</span>
+          <button type="button" className="btn-copy-raw-log" onClick={handleCopy}>
+            {copied ? <CheckIcon /> : <CopyIcon />}
+            <span>{copied ? "Copied" : "Copy JSON"}</span>
+          </button>
+        </div>
+        <pre className="chat-error-raw-json">{parsed.rawOutput}</pre>
+      </div>
+
+      {/* Actions */}
       <div className="chat-error-actions">
         {onRetry && (
           <button type="button" className="btn-error-action primary" onClick={onRetry}>
             <RefreshIcon />
-            Retry
+            Retry Request
           </button>
         )}
         <button type="button" className="btn-error-action" onClick={onOpenSettings}>
           <SettingsIcon />
-          Configure Provider
+          Fix in Provider Settings
         </button>
       </div>
-
-      <details className="chat-error-details">
-        <summary className="chat-error-summary">
-          <span>Diagnostic Log</span>
-          <button
-            type="button"
-            className="btn-copy-raw-log"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              handleCopy();
-            }}
-          >
-            {copied ? <CheckIcon /> : <CopyIcon />}
-            <span>{copied ? "Copied" : "Copy Log"}</span>
-          </button>
-        </summary>
-        <div className="raw-log-wrap">
-          <pre className="raw-log-content">{logPayload}</pre>
-        </div>
-</details>
     </div>
   );
 }
@@ -3528,6 +3613,20 @@ function Chat({
         <div className="home-inner">
           <h1>{greeting()}, Aki</h1>
           <div className="home-composer">
+            {hasError && activeErrorStr && (
+              <div style={{ marginBottom: 16 }}>
+                <ChatErrorCard
+                  rawError={activeErrorStr}
+                  activeProvider={activeProvider}
+                  onRetry={handleRetry}
+                  onDismiss={() => {
+                    setDismissedError(activeErrorStr);
+                    clearError?.();
+                  }}
+                  onOpenSettings={onOpenSettings}
+                />
+              </div>
+            )}
             <Composer
               draft={draft}
               setDraft={setDraft}
