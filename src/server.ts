@@ -215,7 +215,9 @@ export default {
 
         const headers: Record<string, string> = {
           accept: "application/json",
-          "user-agent": "cf-think-agent/1.0",
+          "user-agent": "pi/1.0",
+          "HTTP-Referer": "https://pi.dev",
+          "X-Title": "pi",
         };
         if (body.apiKey?.trim()) {
           headers["authorization"] = `Bearer ${body.apiKey.trim()}`;

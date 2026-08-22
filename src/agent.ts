@@ -40,7 +40,24 @@ function cleanBaseUrl(raw: string): string {
  */
 function createReasoningAwareFetch(customFetch: typeof fetch = fetch): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const res = await customFetch(input, init);
+    // Inject agent harness headers (required by OpenRouter for agentic models like thinkingmachines/inkling:free)
+    const headers = new Headers(init?.headers);
+    if (!headers.has("User-Agent")) {
+      headers.set("User-Agent", "pi/1.0");
+    }
+    if (!headers.has("HTTP-Referer")) {
+      headers.set("HTTP-Referer", "https://pi.dev");
+    }
+    if (!headers.has("X-Title") && !headers.has("X-OpenRouter-Title")) {
+      headers.set("X-Title", "pi");
+    }
+
+    const modifiedInit = {
+      ...init,
+      headers,
+    };
+
+    const res = await customFetch(input, modifiedInit);
     const contentType = res.headers.get("content-type") || "";
 
     if (contentType.includes("text/event-stream") && res.body) {
