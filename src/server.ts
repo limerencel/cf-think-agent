@@ -7,6 +7,7 @@ import {
   generatePkcePair,
   generateRandomString,
   exchangeOAuthCode,
+  resolveHindsightEndpoint,
 } from "./mcp-client";
 
 export { Assistant, ConvoIndex };
@@ -644,10 +645,12 @@ export default {
             return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
           }
 
-          const endpoint = body?.endpoint?.trim();
-          if (!endpoint) {
+          const rawEndpoint = body?.endpoint?.trim();
+          if (!rawEndpoint) {
             return Response.json({ ok: false, error: "endpoint is required" }, { status: 400 });
           }
+
+          const endpoint = resolveHindsightEndpoint(rawEndpoint, body?.bankId?.trim());
 
           const tools = await mcpListTools({
             endpoint,

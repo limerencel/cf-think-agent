@@ -343,6 +343,65 @@ export async function refreshOAuthToken(params: {
 }
 
 /**
+ * Resolves effective Hindsight endpoint incorporating bankId path scope if provided.
+ */
+export function resolveHindsightEndpoint(endpoint: string, bankId?: string): string {
+  let clean = endpoint.trim();
+  if (!clean) return clean;
+  if (bankId && bankId.trim()) {
+    const bank = bankId.trim();
+    // If endpoint does not already end with this bankId:
+    if (!clean.endsWith(`/${bank}`) && !clean.endsWith(`/${bank}/`)) {
+      clean = clean.replace(/\/+$/, "") + "/" + bank;
+    }
+  } else if (clean.endsWith("/mcp")) {
+    clean = clean + "/";
+  }
+  return clean;
+}
+
+/**
+ * Universal JSON-RPC fetcher with explicit redirect following that preserves Authorization headers.
+ */
+async function fetchMcpRpc(
+  initialUrl: string,
+  headers: Record<string, string>,
+  bodyObj: any
+): Promise<{ res: Response; finalUrl: string }> {
+  let url = initialUrl.trim();
+  const bodyStr = JSON.stringify(bodyObj);
+
+  let res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: bodyStr,
+    redirect: "manual",
+  });
+
+  // Handle redirects (301, 302, 307, 308) while preserving Authorization and custom headers
+  if ([301, 302, 307, 308].includes(res.status)) {
+    const loc = res.headers.get("location");
+    if (loc) {
+      const origUrlObj = new URL(url);
+      const targetUrl = new URL(loc, url);
+      // If original was HTTPS and redirect attempts HTTP downgrade or internal port on same host:
+      if (origUrlObj.protocol === "https:" && targetUrl.hostname === origUrlObj.hostname) {
+        targetUrl.protocol = "https:";
+        targetUrl.port = "";
+      }
+      url = targetUrl.toString();
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: bodyStr,
+      });
+    }
+  }
+
+  return { res, finalUrl: url };
+}
+
+/**
  * Probes an MCP endpoint and retrieves the list of exposed tools.
  */
 export async function mcpListTools(
@@ -357,19 +416,15 @@ export async function mcpListTools(
   const headers = buildMcpHeaders(config);
 
   // 1. Initialize Handshake
-  const initRes = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "cf-think-agent", version: "0.1.0" },
-      },
-    }),
+  const { res: initRes, finalUrl } = await fetchMcpRpc(url, headers, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "cf-think-agent", version: "0.1.0" },
+    },
   });
 
   if (!initRes.ok) {
@@ -383,16 +438,12 @@ export async function mcpListTools(
     initRes.headers.get("mcp-session-id") || initRes.headers.get("Mcp-Session-Id");
   if (session) headers["mcp-session-id"] = session;
 
-  // 2. Query tools/list
-  const listRes = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/list",
-      params: {},
-    }),
+  // 2. Query tools/list using the resolved/final URL
+  const { res: listRes } = await fetchMcpRpc(finalUrl, headers, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {},
   });
 
   const raw = await listRes.text();
@@ -435,19 +486,15 @@ export async function mcpCallTool(
 
   try {
     // 1. Initialize
-    const initRes = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-03-26",
-          capabilities: {},
-          clientInfo: { name: "cf-think-agent", version: "0.1.0" },
-        },
-      }),
+    const { res: initRes, finalUrl } = await fetchMcpRpc(url, headers, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "cf-think-agent", version: "0.1.0" },
+      },
     });
 
     if (!initRes.ok) {
@@ -459,15 +506,11 @@ export async function mcpCallTool(
     if (session) headers["mcp-session-id"] = session;
 
     // 2. Call tool
-    const callRes = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/call",
-        params: { name: toolName, arguments: args },
-      }),
+    const { res: callRes } = await fetchMcpRpc(finalUrl, headers, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: toolName, arguments: args },
     });
 
     const raw = await callRes.text();

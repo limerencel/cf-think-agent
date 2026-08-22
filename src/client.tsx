@@ -2539,8 +2539,7 @@ function HindsightSettingsEditor({
           endpoint: endpoint.trim(),
           authType,
           bearerToken: bearerToken.trim() || undefined,
-          cfAccessClientId: cfAccessClientId.trim() || undefined,
-          cfAccessClientSecret: cfAccessClientSecret.trim() || undefined,
+          bankId: bankId.trim() || undefined,
           oauthTokens: config.oauthTokens,
         }),
       });
@@ -2570,8 +2569,6 @@ function HindsightSettingsEditor({
       endpoint: endpoint.trim(),
       authType,
       bearerToken: bearerToken.trim() || undefined,
-      cfAccessClientId: cfAccessClientId.trim() || undefined,
-      cfAccessClientSecret: cfAccessClientSecret.trim() || undefined,
       bankId: bankId.trim() || undefined,
       autoRecall,
       autoRetain,

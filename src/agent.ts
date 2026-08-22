@@ -17,7 +17,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 
-import { mcpCallTool } from "./mcp-client";
+import { mcpCallTool, resolveHindsightEndpoint } from "./mcp-client";
 import type { McpServerConfig, HindsightConfig } from "./mcp-types";
 
 function cleanBaseUrl(raw: string): string {
@@ -250,8 +250,11 @@ export class Assistant extends Think<Env> {
       if (userMessage?.trim()) {
         try {
           const bankId = this.currentHindsightConfig.bankId || this.name;
+          const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
+          const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
+
           const recallRes = await mcpCallTool(
-            this.currentHindsightConfig,
+            hConfig,
             "hindsight_recall",
             {
               query: userMessage.trim(),
@@ -264,7 +267,7 @@ export class Assistant extends Think<Env> {
             this.currentMemoryContext = recallRes.text.trim();
           } else {
             const fallbackRes = await mcpCallTool(
-              this.currentHindsightConfig,
+              hConfig,
               "recall",
               {
                 query: userMessage.trim(),
@@ -343,8 +346,9 @@ export class Assistant extends Think<Env> {
 
     // Register Hermes-style explicit Hindsight Memory tools
     if (this.currentHindsightConfig) {
-      const hConfig = this.currentHindsightConfig;
-      const bankId = hConfig.bankId || this.name;
+      const bankId = this.currentHindsightConfig.bankId || this.name;
+      const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
+      const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
 
       dynamicTools["hindsight_recall"] = tool({
         description: "Search and recall long-term memories, user preferences, and facts from the Hindsight memory bank.",
@@ -481,9 +485,11 @@ export class Assistant extends Think<Env> {
       return { ok: true, message: "Auto-retain not enabled" };
     }
     const bankId = config.bankId || this.name;
+    const resolvedEndpoint = resolveHindsightEndpoint(config.endpoint, bankId);
+    const hConfig = { ...config, endpoint: resolvedEndpoint };
     const content = `User: ${payload.userMessage}\nAssistant: ${payload.assistantResponse}`;
 
-    let res = await mcpCallTool(config, "hindsight_retain", {
+    let res = await mcpCallTool(hConfig, "hindsight_retain", {
       bank_id: bankId,
       content,
       user: payload.userMessage,
@@ -491,7 +497,7 @@ export class Assistant extends Think<Env> {
       timestamp: Date.now(),
     });
     if (!res.ok) {
-      res = await mcpCallTool(config, "retain", {
+      res = await mcpCallTool(hConfig, "retain", {
         bank_id: bankId,
         content,
         user: payload.userMessage,
