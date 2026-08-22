@@ -123,40 +123,13 @@ export class ConvoIndex extends Agent<Env> {
     } catch {
       /* ignore if column already exists */
     }
-  }
-
-  private getDefaultPreset(): ProviderConfig {
-    const endpoint = this.env.AIG_BASE_URL || "";
-    const modelId = this.env.MODEL_ID || "deepseek-v4-flash";
-    return {
-      id: "cf-default",
-      name: "Cloudflare AI Gateway (Env Default)",
-      endpoint,
-      apiKey: "•••••••• (Cloudflare Secret: OPENCODE_GO_API_KEY)",
-      selectedModel: modelId,
-      cachedModels: [modelId],
-      isDefault: true,
-      useResponseApi: false,
-    };
-  }
-
-  private getDefaultMcpPreset(): McpServerConfig {
-    return {
-      id: "gbrain-default",
-      name: "GBrain Personal Knowledge (Built-in)",
-      endpoint: this.env.GBRAIN_MCP_URL || "https://gbrain-mcp.itsuhiro.com/mcp",
-      authType: "bearer",
-      bearerToken: "•••••••• (Cloudflare Secret: GBRAIN_MCP_TOKEN)",
-      enabled: true,
-      isPreset: true,
-      cachedTools: [
-        { name: "get_health", description: "GBrain health: page counts, embed coverage, brain score." },
-        { name: "query", description: "Ask GBrain a natural-language question over stored knowledge." },
-        { name: "search", description: "Keyword / semantic search over GBrain pages. Returns slugs and snippets." },
-        { name: "get_page", description: "Read one GBrain page by slug." },
-        { name: "put_page", description: "Write or update a GBrain page." },
-      ],
-    };
+    // Clean up deprecated hardcoded default provider if present
+    try {
+      await this.ctx.storage.sql.exec("DELETE FROM providers WHERE id = 'cf-default'");
+      await this.ctx.storage.sql.exec("DELETE FROM mcp_servers WHERE id = 'gbrain-default'");
+    } catch {
+      /* ignore */
+    }
   }
 
   /* ---------------- conversation list ---------------- */
@@ -210,9 +183,7 @@ export class ConvoIndex extends Agent<Env> {
       .exec("SELECT * FROM providers ORDER BY updated_at ASC")
       .toArray();
 
-    const defaultPreset = this.getDefaultPreset();
-
-    const list: ProviderConfig[] = rows.map((r) => {
+    return rows.map((r) => {
       let cached: string[] = [];
       try {
         cached = JSON.parse(r.cached_models as string) as string[];
@@ -234,28 +205,10 @@ export class ConvoIndex extends Agent<Env> {
         reasoningEffort: (r.reasoning_effort as "low" | "medium" | "high" | "none") || undefined,
       };
     });
-
-    if (!list.some((p) => p.id === "cf-default")) {
-      return [defaultPreset, ...list];
-    }
-
-    return list.map((p) =>
-      p.id === "cf-default"
-        ? {
-            ...defaultPreset,
-            ...p,
-            endpoint: defaultPreset.endpoint || p.endpoint,
-            apiKey: defaultPreset.apiKey,
-            selectedModel: p.selectedModel || defaultPreset.selectedModel,
-            useResponseApi: false,
-          }
-        : p
-    );
   }
 
   @callable()
   async getProvider(id: string): Promise<ProviderConfig | null> {
-    if (id === "cf-default") return this.getDefaultPreset();
     await this.ensureTables();
     const rows = await this.ctx.storage.sql
       .exec("SELECT * FROM providers WHERE id = ?", id)
@@ -335,7 +288,6 @@ export class ConvoIndex extends Agent<Env> {
 
   @callable()
   async removeProvider(id: string): Promise<ProviderConfig[]> {
-    if (id === "cf-default") return this.listProviders();
     await this.ensureTables();
     await this.ctx.storage.sql.exec("DELETE FROM providers WHERE id = ?", id);
     return this.listProviders();
@@ -369,8 +321,6 @@ export class ConvoIndex extends Agent<Env> {
     const rows = await this.ctx.storage.sql
       .exec("SELECT * FROM mcp_servers ORDER BY updated_at ASC")
       .toArray();
-
-    const defaultPreset = this.getDefaultMcpPreset();
 
     const list: McpServerConfig[] = rows.map((r) => {
       let cachedTools: McpToolDef[] = [];
@@ -408,31 +358,17 @@ export class ConvoIndex extends Agent<Env> {
         oauthTokens,
         enabled: Number(r.enabled) === 1,
         cachedTools,
-        isPreset: Number(r.is_preset) === 1 || r.id === "gbrain-default",
+        isPreset: false,
         updatedAt: Number(r.updated_at) || Date.now(),
       };
     });
 
-    if (!list.some((s) => s.id === "gbrain-default")) {
-      return [defaultPreset, ...list];
-    }
-
-    return list.map((s) =>
-      s.id === "gbrain-default"
-        ? {
-            ...defaultPreset,
-            ...s,
-            endpoint: defaultPreset.endpoint || s.endpoint,
-            bearerToken: defaultPreset.bearerToken,
-            isPreset: true,
-          }
-        : s
-    );
+    return list.filter((s) => s.id !== "gbrain-default");
   }
 
   @callable()
   async getMcpServer(id: string): Promise<McpServerConfig | null> {
-    if (id === "gbrain-default") return this.getDefaultMcpPreset();
+    if (id === "gbrain-default") return null;
     await this.ensureTables();
     const rows = await this.ctx.storage.sql
       .exec("SELECT * FROM mcp_servers WHERE id = ?", id)
@@ -538,10 +474,6 @@ export class ConvoIndex extends Agent<Env> {
 
   @callable()
   async deleteMcpServer(id: string): Promise<McpServerConfig[]> {
-    if (id === "gbrain-default") {
-      await this.ctx.storage.sql.exec("UPDATE mcp_servers SET enabled = 0 WHERE id = ?", id);
-      return this.listMcpServers();
-    }
     await this.ensureTables();
     await this.ctx.storage.sql.exec("DELETE FROM mcp_servers WHERE id = ?", id);
     return this.listMcpServers();

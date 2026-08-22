@@ -384,14 +384,7 @@ export default {
             return Response.json({ ok: false, error: "endpoint is required" }, { status: 400 });
           }
 
-          let bearerToken = body.bearerToken?.trim();
-          // Automatically inject built-in secret token for GBrain preset if masked or omitted
-          if (
-            (body?.serverId === "gbrain-default" || endpoint === env.GBRAIN_MCP_URL || endpoint.includes("gbrain-mcp.itsuhiro.com")) &&
-            (!bearerToken || bearerToken.includes("•"))
-          ) {
-            bearerToken = env.GBRAIN_MCP_TOKEN;
-          }
+          const bearerToken = body.bearerToken?.trim();
 
           const tools = await mcpListTools({
             endpoint,

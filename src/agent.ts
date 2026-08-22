@@ -16,7 +16,6 @@ import { callable } from "agents";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
-import { gbrainCall } from "./gbrain";
 
 import { mcpCallTool } from "./mcp-client";
 import type { McpServerConfig } from "./mcp-types";
@@ -29,6 +28,145 @@ function cleanBaseUrl(raw: string): string {
   url = url.replace(/\/(chat\/completions|responses|models)$/, "");
   url = url.replace(/\/+$/, "");
   return url;
+}
+
+/**
+ * Universal Reasoning / CoT Stream Adapter.
+ *
+ * Intercepts OpenAI-compatible SSE streams (DeepSeek-R1, SiliconFlow, OpenRouter, QwQ, etc.)
+ * that return reasoning tokens in `delta.reasoning_content` (or `reasoning` / `thought`),
+ * which @ai-sdk/openai drops by default. Seamlessly wraps them into `<think>...</think>` inside
+ * `delta.content` so they are delivered to the frontend thinking UI without breaking standard parsers.
+ */
+function createReasoningAwareFetch(customFetch: typeof fetch = fetch): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const res = await customFetch(input, init);
+    const contentType = res.headers.get("content-type") || "";
+
+    if (contentType.includes("text/event-stream") && res.body) {
+      let isInsideReasoning = false;
+      let buffer = "";
+
+      const transformStream = new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          buffer += new TextDecoder().decode(chunk, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          const outputLines: string[] = [];
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:") || trimmed === "data: [DONE]") {
+              outputLines.push(line);
+              continue;
+            }
+
+            const jsonStr = trimmed.slice(5).trim();
+            try {
+              const data = JSON.parse(jsonStr);
+              const choice = data.choices?.[0];
+              if (choice?.delta) {
+                const reasoning =
+                  (typeof choice.delta.reasoning_content === "string" && choice.delta.reasoning_content) ||
+                  (typeof choice.delta.reasoning === "string" && choice.delta.reasoning) ||
+                  (typeof choice.delta.thought === "string" && choice.delta.thought) ||
+                  (choice.delta.reasoning_details?.[0]?.text);
+
+                const content = typeof choice.delta.content === "string" ? choice.delta.content : undefined;
+
+                if (reasoning) {
+                  let injected = "";
+                  if (!isInsideReasoning) {
+                    isInsideReasoning = true;
+                    injected += "<think>";
+                  }
+                  injected += reasoning;
+                  choice.delta.content = (content || "") + injected;
+                  delete choice.delta.reasoning_content;
+                  delete choice.delta.reasoning;
+                  delete choice.delta.thought;
+                  delete choice.delta.reasoning_details;
+                } else if (isInsideReasoning) {
+                  if (content !== undefined && content.length > 0) {
+                    isInsideReasoning = false;
+                    choice.delta.content = "</think>" + content;
+                  } else if (choice.finish_reason) {
+                    isInsideReasoning = false;
+                    choice.delta.content = "</think>";
+                  }
+                }
+              }
+              outputLines.push("data: " + JSON.stringify(data));
+            } catch {
+              outputLines.push(line);
+            }
+          }
+
+          if (outputLines.length > 0) {
+            controller.enqueue(new TextEncoder().encode(outputLines.join("\n") + "\n"));
+          }
+        },
+        flush(controller) {
+          if (buffer) {
+            controller.enqueue(new TextEncoder().encode(buffer));
+          }
+          if (isInsideReasoning) {
+            isInsideReasoning = false;
+            const closeChunk = {
+              id: "think-close",
+              choices: [{ delta: { content: "</think>" }, index: 0 }],
+            };
+            controller.enqueue(
+              new TextEncoder().encode("data: " + JSON.stringify(closeChunk) + "\n\n")
+            );
+          }
+        },
+      });
+
+      return new Response(res.body.pipeThrough(transformStream), {
+        status: res.status,
+        statusText: res.statusText,
+        headers: res.headers,
+      });
+    }
+
+    if (contentType.includes("application/json")) {
+      try {
+        const text = await res.text();
+        const data = JSON.parse(text);
+        const choice = data.choices?.[0];
+        if (choice?.message) {
+          const reasoning =
+            (typeof choice.message.reasoning_content === "string" && choice.message.reasoning_content) ||
+            (typeof choice.message.reasoning === "string" && choice.message.reasoning) ||
+            (typeof choice.message.thought === "string" && choice.message.thought) ||
+            (choice.message.reasoning_details?.[0]?.text);
+          if (reasoning) {
+            choice.message.content = `<think>${reasoning}</think>\n\n${choice.message.content || ""}`;
+            delete choice.message.reasoning_content;
+            delete choice.message.reasoning;
+            delete choice.message.thought;
+            delete choice.message.reasoning_details;
+            return new Response(JSON.stringify(data), {
+              status: res.status,
+              statusText: res.statusText,
+              headers: res.headers,
+            });
+          }
+        }
+        return new Response(text, {
+          status: res.status,
+          statusText: res.statusText,
+          headers: res.headers,
+        });
+      } catch {
+        return res;
+      }
+    }
+
+    return res;
+  };
 }
 
 export class Assistant extends Think<Env> {
@@ -63,6 +201,7 @@ export class Assistant extends Think<Env> {
     const openai = createOpenAI({
       apiKey: this.env.OPENCODE_GO_API_KEY,
       baseURL: cleanBaseUrl(this.env.AIG_BASE_URL),
+      fetch: createReasoningAwareFetch(),
       headers: {
         // Tag every AI Gateway request as coming from the Think edge agent,
         // with the conversation id, so hermes-aig logs are filterable.
@@ -103,6 +242,7 @@ export class Assistant extends Think<Env> {
       const openai = createOpenAI({
         apiKey: custom.apiKey?.trim() || "dummy-key",
         baseURL: cleanEndpoint,
+        fetch: createReasoningAwareFetch(),
         headers: {
           "cf-aig-metadata": JSON.stringify({
             source: "think-edge-agent",
@@ -123,7 +263,7 @@ export class Assistant extends Think<Env> {
     const dynamicTools: ToolSet = {};
 
     for (const s of mcpServers) {
-      if (!s.enabled || s.id === "gbrain-default") continue;
+      if (!s.enabled) continue;
       const prefix = (s.name || "mcp").toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 20);
       for (const t of s.cachedTools || []) {
         const toolName = `${prefix}_${t.name}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
@@ -170,19 +310,14 @@ export class Assistant extends Think<Env> {
     const defaultPrompt = [
       "You are Aki's Cloudflare edge agent.",
       "Reply in the user's language (Chinese if they write Chinese).",
-      "You have access to these core systems and toolsets:",
-      "1) Hindsight (External Live Memory) — Aki's fresh, active, dynamic, frequently updated memory stream (current preferences, ongoing context, evolving thoughts and state).",
-      "2) GBrain (Library & Archive) — Aki's digital library and static archive (structured repository for permanent reference docs, server/infra facts, people, decisions, and historical records).",
-      "3) Cloudflare Computer workspace — durable session files in this Durable Object (read, write, edit, ls).",
-      "4) Parallel Web Search MCP — real-time live web search and URL content extraction.",
+      "You have access to these core systems and built-in capabilities:",
+      "1) Cloudflare Computer workspace — durable session files in this Durable Object (read, write, edit, ls).",
+      "2) Parallel Web Search MCP — real-time live web search and URL content extraction.",
       "",
       "System & Tool usage guidelines:",
-      "- For active context, current preferences, recent activities, or evolving state: check and update Hindsight (live dynamic memory).",
-      "- For structured archives, permanent knowledge, server infra, holdings, or long-term docs: query GBrain (library/archive).",
       "- For notes, code artifacts, or working drafts created in this session: use Cloudflare workspace tools (prefer read/ls/write/edit over bash cat/ls/sed).",
       "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering.",
-      "- Keep replies concise. Cite GBrain slugs or web source URLs when you use them.",
-      "- Do not hallucinate or invent holdings, keys, or infra facts — look them up.",
+      "- Keep replies concise and helpful.",
     ].join("\n");
 
     if (this.currentCustomPrompt) {
@@ -196,53 +331,8 @@ export class Assistant extends Think<Env> {
   }
 
   override getTools(): ToolSet {
-    const url = this.env.GBRAIN_MCP_URL;
-    const token = this.env.GBRAIN_MCP_TOKEN;
-
     return {
       ...createAITools({ workspace: this.workspace }),
-      gbrain_health: tool({
-        description: "GBrain health: page counts, embed coverage, brain score.",
-        inputSchema: z.object({}),
-        execute: async () => gbrainCall(url, token, "get_health", {}),
-      }),
-      gbrain_query: tool({
-        description: "Ask GBrain a natural-language question over stored knowledge. Use for 'what do we know about X'.",
-        inputSchema: z.object({
-          query: z.string().describe("Natural language question"),
-        }),
-        execute: async ({ query }) => gbrainCall(url, token, "query", { query }),
-      }),
-      gbrain_search: tool({
-        description: "Keyword / semantic search over GBrain pages. Returns slugs and snippets.",
-        inputSchema: z.object({
-          query: z.string().describe("Search query"),
-        }),
-        execute: async ({ query }) => gbrainCall(url, token, "search", { query }),
-      }),
-      gbrain_get_page: tool({
-        description: "Read one GBrain page by slug.",
-        inputSchema: z.object({
-          slug: z.string().describe("Page slug, e.g. infra/ntfy"),
-        }),
-        execute: async ({ slug }) => gbrainCall(url, token, "get_page", { slug }),
-      }),
-      gbrain_put_page: tool({
-        description: "Write or update a GBrain page. Use only when the user asks to remember / save knowledge.",
-        inputSchema: z.object({
-          slug: z.string().describe("Page slug"),
-          content: z.string().describe("Full markdown page including optional YAML frontmatter"),
-        }),
-        execute: async ({ slug, content }) =>
-          gbrainCall(url, token, "put_page", { slug, content, ingested_via: "cf-think-agent" }),
-      }),
-      gbrain_recall: tool({
-        description: "Recall extracted facts from GBrain (not full pages).",
-        inputSchema: z.object({
-          query: z.string().describe("What to recall"),
-        }),
-        execute: async ({ query }) => gbrainCall(url, token, "recall", { query }),
-      }),
     };
   }
 

@@ -1,4 +1,4 @@
-import { Component, Suspense, type ReactElement, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Component, Suspense, type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart } from "ai";
@@ -50,34 +50,6 @@ export interface ProviderConfig {
   reasoningEffort?: "low" | "medium" | "high" | "none";
 }
 
-const DEFAULT_PRESET: ProviderConfig = {
-  id: "cf-default",
-  name: "Cloudflare AI Gateway",
-  endpoint: "",
-  apiKey: "",
-  selectedModel: "deepseek-v4-flash",
-  cachedModels: ["deepseek-v4-flash"],
-  isDefault: true,
-  useResponseApi: false,
-};
-
-const DEFAULT_MCP_PRESET: McpServerConfig = {
-  id: "gbrain-default",
-  name: "GBrain Personal Knowledge (Built-in)",
-  endpoint: "https://gbrain-mcp.itsuhiro.com/mcp",
-  authType: "bearer",
-  bearerToken: "",
-  enabled: true,
-  isPreset: true,
-  cachedTools: [
-    { name: "get_health", description: "GBrain health: page counts, embed coverage, brain score." },
-    { name: "query", description: "Ask GBrain a natural-language question over stored knowledge." },
-    { name: "search", description: "Keyword / semantic search over GBrain pages. Returns slugs and snippets." },
-    { name: "get_page", description: "Read one GBrain page by slug." },
-    { name: "put_page", description: "Write or update a GBrain page." },
-  ],
-};
-
 const LS_KEY = "edgeagent.conversations";
 const LS_THEME_KEY = "edgeagent.theme";
 const LS_PROVIDERS_KEY = "edgeagent.providers";
@@ -124,38 +96,18 @@ function loadLocalProviders(): ProviderConfig[] {
     const raw = localStorage.getItem(LS_PROVIDERS_KEY);
     if (raw) {
       const list = JSON.parse(raw) as ProviderConfig[];
-      if (!list.some((p) => p.id === "cf-default")) {
-        return [DEFAULT_PRESET, ...list];
-      }
-      return list;
+      return list.filter((p) => p.id !== "cf-default");
     }
-    // Migration from old model_configs format
-    const oldRaw = localStorage.getItem("edgeagent.model_configs");
-    if (oldRaw) {
-      const oldList = JSON.parse(oldRaw) as any[];
-      const migrated: ProviderConfig[] = oldList.map((m) => ({
-        id: m.id,
-        name: m.name || "Custom Provider",
-        endpoint: m.endpoint || "",
-        apiKey: m.apiKey || "",
-        selectedModel: m.modelId || "deepseek-chat",
-        cachedModels: [m.modelId || "deepseek-chat"],
-        isDefault: !!m.isDefault,
-      }));
-      if (!migrated.some((p) => p.id === "cf-default")) {
-        migrated.unshift(DEFAULT_PRESET);
-      }
-      return migrated;
-    }
-    return [DEFAULT_PRESET];
+    return [];
   } catch {
-    return [DEFAULT_PRESET];
+    return [];
   }
 }
 
 function saveLocalProviders(providers: ProviderConfig[]): void {
   try {
-    localStorage.setItem(LS_PROVIDERS_KEY, JSON.stringify(providers));
+    const clean = providers.filter((p) => p.id !== "cf-default");
+    localStorage.setItem(LS_PROVIDERS_KEY, JSON.stringify(clean));
   } catch {
     /* ignore */
   }
@@ -163,12 +115,12 @@ function saveLocalProviders(providers: ProviderConfig[]): void {
 
 function loadActiveProviderId(providers: ProviderConfig[]): string {
   try {
-    const raw = localStorage.getItem(LS_ACTIVE_PROVIDER_KEY) || localStorage.getItem("edgeagent.active_model_id");
-    if (raw && providers.some((p) => p.id === raw)) return raw;
+    const raw = localStorage.getItem(LS_ACTIVE_PROVIDER_KEY);
+    if (raw && raw !== "cf-default" && providers.some((p) => p.id === raw)) return raw;
     const def = providers.find((p) => p.isDefault);
-    return def?.id ?? providers[0]?.id ?? "cf-default";
+    return def?.id ?? providers[0]?.id ?? "";
   } catch {
-    return "cf-default";
+    return "";
   }
 }
 
@@ -274,20 +226,18 @@ function loadLocalMcpServers(): McpServerConfig[] {
     const raw = localStorage.getItem(LS_MCP_KEY);
     if (raw) {
       const list = JSON.parse(raw) as McpServerConfig[];
-      if (!list.some((s) => s.id === "gbrain-default")) {
-        return [DEFAULT_MCP_PRESET, ...list];
-      }
-      return list;
+      return list.filter((s) => s.id !== "gbrain-default");
     }
-    return [DEFAULT_MCP_PRESET];
+    return [];
   } catch {
-    return [DEFAULT_MCP_PRESET];
+    return [];
   }
 }
 
 function saveLocalMcpServers(servers: McpServerConfig[]): void {
   try {
-    localStorage.setItem(LS_MCP_KEY, JSON.stringify(servers));
+    const clean = servers.filter((s) => s.id !== "gbrain-default");
+    localStorage.setItem(LS_MCP_KEY, JSON.stringify(clean));
   } catch {
     /* ignore */
   }
@@ -610,6 +560,24 @@ function CheckIcon() {
   );
 }
 
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M8 4.5v3.8l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TokenIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeDasharray="3 1.5" />
+      <path d="M6 7.2h4M6 9.2h4M7.2 5.5v5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function SideCollapseIcon() {
   return (
     <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
@@ -760,7 +728,7 @@ function ToolBits({ message }: { message: UIMessage }) {
         const rawName = getToolName(part);
         const state = "state" in part ? (part.state as string) : "";
         const cls = state === "output-available" ? "ok" : state === "output-error" ? "err" : "run";
-        let display = rawName.replace(/^gbrain_/, "gbrain · ");
+        let display = rawName;
         if (["read", "write", "edit", "ls", "rm", "mkdir", "stat"].includes(rawName)) {
           display = `workspace · ${rawName}`;
         }
@@ -872,11 +840,6 @@ function ThoughtBlock({ thought, isThinking }: { thought: string; isThinking?: b
           <span className="thought-title">
             {isThinking ? "Thinking…" : "Chain of Thought"}
           </span>
-          {!isThinking && (
-            <span className="thought-length-badge">
-              {thought.length} chars
-            </span>
-          )}
         </div>
         <div className="thought-toggle-right">
           <span className="thought-chevron">{open ? <ChevronDownIcon /> : <ChevronRightIcon />}</span>
@@ -888,6 +851,72 @@ function ThoughtBlock({ thought, isThinking }: { thought: string; isThinking?: b
           <Markdown text={thought} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Standard CJK + English Tokenizer Estimator
+ */
+function estimateTokenCount(text: string): number {
+  if (!text) return 0;
+  const cjkMatches = text.match(/[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const nonCjk = text.replace(/[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g, " ");
+  const wordMatches = nonCjk.match(/\S+/g);
+  const wordCount = wordMatches ? wordMatches.length : 0;
+  const punctMatches = text.match(/[^\w\s\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g);
+  const punctCount = punctMatches ? punctMatches.length : 0;
+  const est = Math.round(cjkCount * 1.2 + wordCount * 1.3 + punctCount * 0.5);
+  return Math.max(1, est);
+}
+
+function MessageMetaFooter({
+  rawText,
+  durationSec,
+}: {
+  rawText: string;
+  durationSec?: number;
+}) {
+  const [copied, setCopied] = useState(false);
+  const tokenCount = useMemo(() => estimateTokenCount(rawText), [rawText]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(rawText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  if (!rawText.trim()) return null;
+
+  return (
+    <div className="message-meta-footer">
+      {durationSec !== undefined && durationSec > 0 && (
+        <span className="message-meta-item" title={`Total turn latency: ${durationSec}s`}>
+          <ClockIcon />
+          <span>{durationSec}s</span>
+        </span>
+      )}
+      {tokenCount > 0 && (
+        <span className="message-meta-item" title={`Estimated token usage: ~${tokenCount.toLocaleString()} tokens`}>
+          <TokenIcon />
+          <span>{tokenCount.toLocaleString()} tok</span>
+        </span>
+      )}
+      <button
+        type="button"
+        className="message-meta-copy-btn"
+        onClick={handleCopy}
+        title="Copy response markdown"
+        aria-label="Copy response markdown"
+      >
+        {copied ? <CheckIcon /> : <CopyIcon />}
+        <span>{copied ? "Copied" : "Copy"}</span>
+      </button>
     </div>
   );
 }
@@ -1584,7 +1613,7 @@ function ProviderEditor({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (provider.id !== "cf-default" && !endpoint.trim()) {
+    if (!endpoint.trim()) {
       setStatusMsg({ type: "err", text: "Endpoint URL is required." });
       return;
     }
@@ -1610,14 +1639,12 @@ function ProviderEditor({
     onSave(updated);
   };
 
-  const isPreset = provider.id === "cf-default";
-
   return (
     <form className="form-grid" onSubmit={handleSubmit} autoComplete="off" data-lpignore="true" data-1p-ignore="true">
       <div className="form-group">
         <label className="form-label">
           Provider Name
-          <span className="form-hint">e.g. OpenRouter, DeepSeek Official, OpenAI</span>
+          <span className="form-hint">e.g. OpenRouter, DeepSeek Official, OpenAI, Anthropic, Ollama</span>
         </label>
         <input
           type="text"
@@ -1630,109 +1657,90 @@ function ProviderEditor({
           data-1p-ignore="true"
           data-form-type="other"
           className="text-input"
-          placeholder="Provider Display Name"
+          placeholder="e.g. DeepSeek / OpenAI / OpenRouter"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
         />
       </div>
 
-      {isPreset ? (
-        <div className="info-card" style={{ marginBottom: 6 }}>
-          <div className="info-card-icon">
-            <SparklesIcon />
-          </div>
-          <div className="info-card-content">
-            <span className="info-card-title">Cloudflare Worker Native Preset</span>
-            <span className="info-card-desc">
-              Base URL: <code>{endpoint || "Loaded from wrangler.jsonc (AIG_BASE_URL)"}</code><br />
-              API Key: <code>Stored in Cloudflare Secret (OPENCODE_GO_API_KEY)</code><br />
-              Default Model: <code>{selectedModel}</code> (MODEL_ID in wrangler.jsonc)<br />
-              Protocol: <code>OpenAI Chat Completions (/chat/completions)</code>
+      <div className="form-group">
+        <label className="form-label">
+          AI Endpoint (Base URL)
+          <span className="form-hint">e.g. <code>https://api.deepseek.com/v1</code> or <code>https://openrouter.ai/api/v1</code></span>
+        </label>
+        <input
+          type="text"
+          name="provider_endpoint_field"
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-form-type="other"
+          className="text-input"
+          placeholder="https://api.deepseek.com/v1 or https://api.openai.com/v1"
+          value={endpoint}
+          onChange={(e) => setEndpoint(e.target.value)}
+          required
+        />
+      </div>
+
+      <div className="protocol-select-box">
+        <label className="checkbox-label" style={{ alignItems: "flex-start", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={useResponseApi}
+            onChange={(e) => setUseResponseApi(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <div className="checkbox-text-group">
+            <span className="checkbox-title">Use OpenAI Response Protocol (Beta /responses)</span>
+            <span className="checkbox-desc">
+              Enable only if this provider/model explicitly requires OpenAI's /responses protocol. Unchecked by default (uses standard /v1/chat/completions, compatible with DeepSeek, OpenRouter, and standard endpoints).
             </span>
           </div>
+        </label>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">API Key</label>
+        <div className="input-row">
+          <input
+            type="text"
+            name="provider_key_field"
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-form-type="other"
+            className={showApiKey ? "text-input" : "text-input key-masked"}
+            placeholder="sk-... (optional for local Ollama)"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-icon"
+            onClick={() => setShowApiKey(!showApiKey)}
+            title={showApiKey ? "Hide API key" : "Show API key"}
+          >
+            {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleFetchModels}
+            disabled={loadingModels || !endpoint.trim()}
+          >
+            {loadingModels ? <span className="spinner" /> : <SparklesIcon />}
+            {loadingModels ? "Loading..." : "Load / Refresh Models"}
+          </button>
         </div>
-      ) : (
-        <>
-          <div className="form-group">
-            <label className="form-label">
-              AI Endpoint (Base URL)
-              <span className="form-hint">e.g. <code>https://api.deepseek.com/v1</code> or <code>https://openrouter.ai/api/v1</code>. No trailing <code>/chat/completions</code> needed.</span>
-            </label>
-            <input
-              type="text"
-              name="provider_endpoint_field"
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              data-lpignore="true"
-              data-1p-ignore="true"
-              data-form-type="other"
-              className="text-input"
-              placeholder="https://openrouter.ai/api/v1 or https://api.deepseek.com/v1"
-              value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="protocol-select-box">
-            <label className="checkbox-label" style={{ alignItems: "flex-start", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={useResponseApi}
-                onChange={(e) => setUseResponseApi(e.target.checked)}
-                style={{ marginTop: 3 }}
-              />
-              <div className="checkbox-text-group">
-                <span className="checkbox-title">Use OpenAI Response Protocol (Beta /responses)</span>
-                <span className="checkbox-desc">
-                  Enable only if this provider/model explicitly supports OpenAI's /responses protocol. Unchecked by default (uses standard /v1/chat/completions, fully compatible with DeepSeek, Ollama, OpenRouter, and standard OpenAI-compatible endpoints).
-                </span>
-              </div>
-            </label>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">API Key</label>
-            <div className="input-row">
-              <input
-                type="text"
-                name="provider_key_field"
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-                className={showApiKey ? "text-input" : "text-input key-masked"}
-                placeholder="sk-..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => setShowApiKey(!showApiKey)}
-                title={showApiKey ? "Hide API key" : "Show API key"}
-              >
-                {showApiKey ? <EyeOffIcon /> : <EyeIcon />}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleFetchModels}
-                disabled={loadingModels || !endpoint.trim()}
-              >
-                {loadingModels ? <span className="spinner" /> : <SparklesIcon />}
-                {loadingModels ? "Loading..." : "Load / Refresh Models"}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      </div>
 
       <div className="form-group">
         <label className="form-label">
@@ -1743,7 +1751,7 @@ function ProviderEditor({
           value={selectedModel}
           onChange={setSelectedModel}
           options={cachedModels}
-          placeholder="Select from dropdown or type model ID"
+          placeholder="Select from dropdown or type model ID (e.g. deepseek-chat)"
         />
       </div>
 
@@ -1866,7 +1874,17 @@ function ProviderEditor({
           />
           Set as default provider
         </label>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {!isNew && onDelete && (
+            <button
+              type="button"
+              className="btn-text-del"
+              onClick={onDelete}
+              style={{ marginRight: 8 }}
+            >
+              Delete Provider
+            </button>
+          )}
           {!isNew && (
             <button type="button" className="btn-secondary" onClick={onCancel}>
               Close
@@ -1926,8 +1944,6 @@ function McpServerEditor({
   const [loadingTools, setLoadingTools] = useState(false);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-
-  const isPreset = server.id === "gbrain-default";
 
   useEffect(() => {
     const handleMessage = async (e: MessageEvent) => {
@@ -2037,7 +2053,7 @@ function McpServerEditor({
       oauthTokens,
       enabled,
       cachedTools,
-      isPreset,
+      isPreset: false,
       updatedAt: Date.now(),
     };
     onSave(updated);
@@ -2072,7 +2088,6 @@ function McpServerEditor({
           value={endpoint}
           onChange={(e) => setEndpoint(e.target.value)}
           required
-          disabled={isPreset}
         />
       </div>
 
@@ -2087,7 +2102,6 @@ function McpServerEditor({
             className={`tab-btn ${authType === "none" ? "active" : ""}`}
             style={{ flex: 1, justifyContent: "center" }}
             onClick={() => setAuthType("none")}
-            disabled={isPreset}
           >
             No Auth
           </button>
@@ -2096,7 +2110,6 @@ function McpServerEditor({
             className={`tab-btn ${authType === "bearer" ? "active" : ""}`}
             style={{ flex: 1, justifyContent: "center" }}
             onClick={() => setAuthType("bearer")}
-            disabled={isPreset}
           >
             Bearer Token
           </button>
@@ -2105,14 +2118,13 @@ function McpServerEditor({
             className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
             style={{ flex: 1, justifyContent: "center" }}
             onClick={() => setAuthType("oauth")}
-            disabled={isPreset}
           >
             OAuth 2.0
           </button>
         </div>
       </div>
 
-      {authType === "bearer" && !isPreset && (
+      {authType === "bearer" && (
         <div className="form-group">
           <label className="form-label">
             Bearer Token / API Key
@@ -2138,7 +2150,7 @@ function McpServerEditor({
         </div>
       )}
 
-      {authType === "oauth" && !isPreset && (
+      {authType === "oauth" && (
         <div className="protocol-select-box" style={{ marginTop: 2, marginBottom: 4 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2252,7 +2264,7 @@ function McpServerEditor({
           Enable this MCP server
         </label>
         <div style={{ display: "flex", gap: 8 }}>
-          {onDelete && !isPreset && (
+          {onDelete && (
             <button type="button" className="btn-text-del" onClick={onDelete}>
               <TrashIcon />
               <span>Delete</span>
@@ -2492,7 +2504,7 @@ function SettingsModal({
 
   if (!isOpen) return null;
 
-  const handleSaveProvider = (updatedProvider: ProviderConfig, isNew?: boolean) => {
+  const handleSaveProvider = async (updatedProvider: ProviderConfig, isNew?: boolean) => {
     let updated = [...providers];
     if (updatedProvider.isDefault) {
       updated = updated.map((p) => ({ ...p, isDefault: false }));
@@ -2507,21 +2519,41 @@ function SettingsModal({
       onSaveProviders(updated);
       setExpandedProviderId(null);
     }
+    try {
+      const cloudList = await cloudSaveProvider(updatedProvider);
+      if (Array.isArray(cloudList)) onSaveProviders(cloudList, isNew ? updatedProvider.id : undefined);
+    } catch (err) {
+      console.error("Failed to save provider to cloud:", err);
+    }
   };
 
-  const handleDeleteProvider = (id: string) => {
-    if (id === "cf-default") return;
+  const handleDeleteProvider = async (id: string) => {
     const updated = providers.filter((p) => p.id !== id);
-    const nextActive = activeProviderId === id ? "cf-default" : undefined;
+    const nextActive = activeProviderId === id ? (updated[0]?.id || "") : undefined;
     onSaveProviders(updated, nextActive);
+    try {
+      const cloudList = await cloudRemoveProvider(id);
+      if (Array.isArray(cloudList)) onSaveProviders(cloudList, nextActive);
+    } catch (err) {
+      console.error("Failed to remove provider from cloud:", err);
+    }
   };
 
-  const handleSetDefaultProvider = (id: string) => {
+  const handleSetDefaultProvider = async (id: string) => {
     const updated = providers.map((p) => ({
       ...p,
       isDefault: p.id === id,
     }));
-    onSaveProviders(updated);
+    onSaveProviders(updated, id);
+    try {
+      const target = updated.find((p) => p.id === id);
+      if (target) {
+        await cloudSaveProvider(target);
+      }
+      await cloudSetActiveProvider(id);
+    } catch (err) {
+      console.error("Failed to set default provider in cloud:", err);
+    }
   };
 
   const handleSaveMcpServer = async (updatedServer: McpServerConfig, isNew?: boolean) => {
@@ -2544,7 +2576,6 @@ function SettingsModal({
   };
 
   const handleDeleteMcpServer = async (id: string) => {
-    if (id === "gbrain-default") return;
     const updated = mcpServers.filter((s) => s.id !== id);
     onSaveMcpServers(updated);
     try {
@@ -2768,10 +2799,23 @@ function SettingsModal({
               )}
 
               {/* Providers List */}
+              {providers.length === 0 && !isAddingNew && (
+                <div className="empty-state-card" style={{ textAlign: "center", padding: "36px 16px", border: "1px dashed var(--border)", borderRadius: 12, margin: "12px 0" }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>✨</div>
+                  <h4 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>No AI Providers Configured</h4>
+                  <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--muted)", maxWidth: 440, marginLeft: "auto", marginRight: "auto", lineHeight: 1.5 }}>
+                    Add your AI model provider (OpenAI, DeepSeek, OpenRouter, Anthropic proxy, Cloudflare AI Gateway, or local Ollama) to start generating responses.
+                  </p>
+                  <button type="button" className="btn-primary" onClick={() => setIsAddingNew(true)}>
+                    <PlusIcon />
+                    <span>Add AI Provider</span>
+                  </button>
+                </div>
+              )}
+
               <div className="providers-list">
                 {providers.map((p) => {
                   const isActive = p.id === activeProviderId;
-                  const isPreset = p.id === "cf-default";
                   const isExpanded = expandedProviderId === p.id;
 
                   return (
@@ -2785,7 +2829,6 @@ function SettingsModal({
                             <span className="provider-name">{p.name}</span>
                             {isActive && <span className="badge badge-active">Active</span>}
                             {p.isDefault && <span className="badge badge-default">Default</span>}
-                            {isPreset && <span className="badge badge-preset">Cloudflare</span>}
                           </div>
                           <span className="provider-desc">
                             Model: <span className="provider-model-tag">{p.selectedModel}</span>
@@ -2818,16 +2861,14 @@ function SettingsModal({
                           >
                             {isExpanded ? "Collapse" : "Configure"}
                           </button>
-                          {!isPreset && (
-                            <button
-                              type="button"
-                              className="btn-text-del"
-                              onClick={() => handleDeleteProvider(p.id)}
-                              title="Delete provider"
-                            >
-                              <XIcon />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="btn-text-del"
+                            onClick={() => handleDeleteProvider(p.id)}
+                            title="Delete provider"
+                          >
+                            <XIcon />
+                          </button>
                         </div>
                       </div>
 
@@ -2838,7 +2879,7 @@ function SettingsModal({
                             provider={p}
                             onSave={(updated) => handleSaveProvider(updated, false)}
                             onCancel={() => setExpandedProviderId(null)}
-                            onDelete={!isPreset ? () => handleDeleteProvider(p.id) : undefined}
+                            onDelete={() => handleDeleteProvider(p.id)}
                           />
                         </div>
                       )}
@@ -2901,6 +2942,21 @@ function SettingsModal({
 
               {/* MCP Servers List */}
               <div className="providers-list">
+                {mcpServers.length === 0 && !isAddingMcp && (
+                  <div className="empty-card" style={{ padding: "20px 16px", textAlign: "center", border: "1px dashed var(--line)", borderRadius: 12 }}>
+                    <p style={{ margin: "0 0 10px", color: "var(--muted)", fontSize: 13.5 }}>
+                      No external MCP servers connected. You can add any custom MCP server endpoint below.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => setIsAddingMcp(true)}
+                    >
+                      <PlusIcon />
+                      <span>Add Your First MCP Server</span>
+                    </button>
+                  </div>
+                )}
                 {mcpServers.map((s) => {
                   const isExpanded = expandedMcpId === s.id;
                   const isRefreshing = refreshingMcpId === s.id;
@@ -2925,7 +2981,6 @@ function SettingsModal({
                             <span className="badge badge-tools-count">
                               {s.cachedTools.length} Tool{s.cachedTools.length === 1 ? "" : "s"}
                             </span>
-                            {s.isPreset && <span className="badge badge-preset">Cloudflare Built-in</span>}
                           </div>
                           <span className="provider-desc">
                             Endpoint: <code>{s.endpoint}</code>
@@ -2956,16 +3011,14 @@ function SettingsModal({
                           >
                             {isExpanded ? "Collapse" : "Configure"}
                           </button>
-                          {!s.isPreset && (
-                            <button
-                              type="button"
-                              className="btn-text-del"
-                              onClick={() => handleDeleteMcpServer(s.id)}
-                              title="Delete MCP server"
-                            >
-                              <TrashIcon />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="btn-text-del"
+                            onClick={() => handleDeleteMcpServer(s.id)}
+                            title="Delete MCP server"
+                          >
+                            <TrashIcon />
+                          </button>
                         </div>
                       </div>
 
@@ -2976,7 +3029,7 @@ function SettingsModal({
                             server={s}
                             onSave={(updated) => handleSaveMcpServer(updated, false)}
                             onCancel={() => setExpandedMcpId(null)}
-                            onDelete={!s.isPreset ? () => handleDeleteMcpServer(s.id) : undefined}
+                            onDelete={() => handleDeleteMcpServer(s.id)}
                             onOAuthCompleted={handleOAuthSuccess}
                           />
                         </div>
@@ -3058,7 +3111,7 @@ function Composer({
   setDraft: (v: string) => void;
   onSubmit: () => void;
   busy: boolean;
-  activeProvider: ProviderConfig;
+  activeProvider?: ProviderConfig;
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
   onOpenSettings: () => void;
@@ -3093,20 +3146,22 @@ function Composer({
         <button
           type="button"
           className="pill pill-interactive"
-          onClick={() => setMenuOpen(!menuOpen)}
+          onClick={() => (providers.length > 0 ? setMenuOpen(!menuOpen) : onOpenSettings())}
           aria-label="Select provider and model"
         >
           <SparklesIcon />
-          <span>{activeProvider.name}: {activeProvider.selectedModel}</span>
-          {activeProvider.reasoningEffort && activeProvider.reasoningEffort !== "none" && (
+          <span>{activeProvider ? `${activeProvider.name}: ${activeProvider.selectedModel}` : "Configure AI Provider"}</span>
+          {activeProvider?.reasoningEffort && activeProvider.reasoningEffort !== "none" && (
             <span className="reasoning-effort-badge" title={`Reasoning Effort: ${activeProvider.reasoningEffort}`}>
               <ZapIcon />
               <span>{activeProvider.reasoningEffort.toUpperCase()}</span>
             </span>
           )}
-          <span className={`pill-caret ${menuOpen ? "open" : ""}`}>
-            <ChevronDownIcon />
-          </span>
+          {providers.length > 0 && (
+            <span className={`pill-caret ${menuOpen ? "open" : ""}`}>
+              <ChevronDownIcon />
+            </span>
+          )}
         </button>
 
         {menuOpen && (
@@ -3114,41 +3169,51 @@ function Composer({
             <div className="model-popover-backdrop" onClick={() => setMenuOpen(false)} />
             <div className="model-popover">
               <div className="popover-head">Select Provider</div>
-              {providers.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`popover-item ${p.id === activeProvider.id ? "active" : ""}`}
-                  onClick={() => {
-                    onSelectProvider(p.id);
-                    setMenuOpen(false);
-                  }}
-                >
-                  <div className="popover-item-title">
-                    <span className="popover-item-name">{p.name}</span>
-                    <span className="popover-item-sub">{p.selectedModel}</span>
-                  </div>
-                  {p.id === activeProvider.id && <CheckIcon />}
-                </button>
-              ))}
-
-              <div className="popover-divider" />
-              <div className="popover-section-label">Reasoning Effort (CoT)</div>
-              <div className="segmented-nav" style={{ margin: "4px 8px 8px", padding: 2 }}>
-                {(["none", "low", "medium", "high"] as const).map((lvl) => (
+              {providers.length === 0 ? (
+                <div style={{ padding: "12px 14px", fontSize: 13, color: "var(--muted)" }}>
+                  No providers configured yet.
+                </div>
+              ) : (
+                providers.map((p) => (
                   <button
-                    key={lvl}
+                    key={p.id}
                     type="button"
-                    className={`tab-btn ${(activeProvider.reasoningEffort || "none") === lvl ? "active" : ""}`}
-                    style={{ flex: 1, justifyContent: "center", fontSize: 11, padding: "4px 2px" }}
+                    className={`popover-item ${p.id === activeProvider?.id ? "active" : ""}`}
                     onClick={() => {
-                      if (onUpdateReasoningEffort) onUpdateReasoningEffort(lvl);
+                      onSelectProvider(p.id);
+                      setMenuOpen(false);
                     }}
                   >
-                    {lvl === "none" ? "Off" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                    <div className="popover-item-title">
+                      <span className="popover-item-name">{p.name}</span>
+                      <span className="popover-item-sub">{p.selectedModel}</span>
+                    </div>
+                    {p.id === activeProvider?.id && <CheckIcon />}
                   </button>
-                ))}
-              </div>
+                ))
+              )}
+
+              {activeProvider && (
+                <>
+                  <div className="popover-divider" />
+                  <div className="popover-section-label">Reasoning Effort (CoT)</div>
+                  <div className="segmented-nav" style={{ margin: "4px 8px 8px", padding: 2 }}>
+                    {(["none", "low", "medium", "high"] as const).map((lvl) => (
+                      <button
+                        key={lvl}
+                        type="button"
+                        className={`tab-btn ${(activeProvider.reasoningEffort || "none") === lvl ? "active" : ""}`}
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11, padding: "4px 2px" }}
+                        onClick={() => {
+                          if (onUpdateReasoningEffort) onUpdateReasoningEffort(lvl);
+                        }}
+                      >
+                        {lvl === "none" ? "Off" : lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               <div className="popover-divider" />
               <button
@@ -3175,9 +3240,9 @@ function Composer({
 }
 
 const HINTS = [
-  "What infra pages do I have in GBrain?",
-  "Write today's notes in the workspace",
-  "Look up my Schwab records",
+  "Search the web for the latest Cloudflare Agents SDK features",
+  "Write today's meeting notes and save them in the workspace",
+  "Summarize the latest AI architecture breakthroughs",
 ];
 
 /* ---------------- Diagnostic Error Card ---------------- */
@@ -3190,7 +3255,7 @@ function ChatErrorCard({
   onOpenSettings,
 }: {
   rawError: string;
-  activeProvider: ProviderConfig;
+  activeProvider?: ProviderConfig;
   onRetry?: () => void;
   onDismiss: () => void;
   onOpenSettings: () => void;
@@ -3203,6 +3268,10 @@ function ChatErrorCard({
   let title = "Model Request Failed";
   let explanation = "The upstream model service returned an unexpected response. Check your model settings or inspect the diagnostic log below.";
 
+  const providerName = activeProvider?.name || "Configured Provider";
+  const modelId = activeProvider?.selectedModel || "Unknown Model";
+  const endpoint = activeProvider?.endpoint || "(Worker Default)";
+
   if (
     errLower.includes("401") ||
     errLower.includes("unauthorized") ||
@@ -3212,7 +3281,7 @@ function ChatErrorCard({
     category = "Authentication (401)";
     badge = "Auth Failed";
     title = "Authentication Failed";
-    explanation = `The API key for provider [${activeProvider.name}] is invalid or expired. Please update your key in Settings.`;
+    explanation = `The API key for provider [${providerName}] is invalid or expired. Please update your key in Settings.`;
   } else if (
     errLower.includes("404") ||
     errLower.includes("not found") ||
@@ -3222,9 +3291,9 @@ function ChatErrorCard({
     category = "Protocol / Endpoint Mismatch (404)";
     badge = "404 Not Found";
     title = "Endpoint Not Found / Protocol Mismatch";
-    explanation = activeProvider.useResponseApi
-      ? `OpenAI Response API is currently enabled, but the upstream endpoint (${activeProvider.endpoint || "AI Gateway"}) may only support standard /v1/chat/completions. Try unchecking "Use OpenAI Response Protocol" in Settings.`
-      : `Could not locate the model endpoint (${activeProvider.endpoint || "AI Gateway"}). Verify your Base URL format (e.g. /v1 suffix) and ensure model ID [${activeProvider.selectedModel}] is correct.`;
+    explanation = activeProvider?.useResponseApi
+      ? `OpenAI Response API is currently enabled, but the upstream endpoint (${endpoint}) may only support standard /v1/chat/completions. Try unchecking "Use OpenAI Response Protocol" in Settings.`
+      : `Could not locate the model endpoint (${endpoint}). Verify your Base URL format (e.g. /v1 suffix) and ensure model ID [${modelId}] is correct.`;
   } else if (
     errLower.includes("429") ||
     errLower.includes("rate limit") ||
@@ -3243,7 +3312,7 @@ function ChatErrorCard({
     category = "Tool Calling Incompatible";
     badge = "Tools Unsupported";
     title = "Model Incompatible with Tool Calling";
-    explanation = `Model [${activeProvider.selectedModel}] does not seem to support Function Calling / Tools required for GBrain and Workspace operations. Consider switching to DeepSeek-V3/R1, GPT-4o, or Claude 3.5.`;
+    explanation = `Model [${modelId}] does not seem to support Function Calling / Tools required for GBrain and Workspace operations. Consider switching to DeepSeek-V3/R1, GPT-4o, or Claude 3.5.`;
   } else if (
     errLower.includes("websocket") ||
     errLower.includes("connection") ||
@@ -3260,11 +3329,11 @@ function ChatErrorCard({
       timestamp: new Date().toISOString(),
       category,
       provider: {
-        id: activeProvider.id,
-        name: activeProvider.name,
-        endpoint: activeProvider.endpoint || "(Worker Default)",
-        model: activeProvider.selectedModel,
-        protocol: activeProvider.useResponseApi ? "openai.responses (/responses)" : "openai.chat (/chat/completions)",
+        id: activeProvider?.id || "none",
+        name: providerName,
+        endpoint,
+        model: modelId,
+        protocol: activeProvider?.useResponseApi ? "openai.responses (/responses)" : "openai.chat (/chat/completions)",
       },
       error: rawError,
     },
@@ -3353,7 +3422,7 @@ function Chat({
 }: {
   convoId: string;
   onFirstMessage: (text: string) => void;
-  activeProvider: ProviderConfig;
+  activeProvider?: ProviderConfig;
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
   onOpenSettings: () => void;
@@ -3369,12 +3438,12 @@ function Chat({
   const { messages, sendMessage, status, error, regenerate, clearError, connectionError } = useAgentChat({
     agent,
     body: () => ({
-      providerId: activeProvider.id,
+      providerId: activeProvider?.id,
       mcpServers,
       customSystemPrompt,
       promptMode: systemPromptMode,
       customModel:
-        activeProvider.id !== "cf-default" && activeProvider.endpoint && activeProvider.selectedModel
+        activeProvider?.endpoint && activeProvider?.selectedModel
           ? {
               endpoint: activeProvider.endpoint,
               apiKey: activeProvider.apiKey,
@@ -3389,14 +3458,29 @@ function Chat({
     }),
   });
 
-  // Automatically refresh workspace files when agent finishes a turn
+  // Automatically refresh workspace files & record turn durations when agent finishes a turn
+  const msgDurationsRef = useRef<Record<string, number>>({});
+  const turnStartTimeRef = useRef<number | null>(null);
+
   const prevStatusRef = useRef(status);
   useEffect(() => {
-    if (prevStatusRef.current === "streaming" && status === "ready") {
+    if (status === "submitted" || status === "streaming") {
+      if (!turnStartTimeRef.current) {
+        turnStartTimeRef.current = Date.now();
+      }
+    } else if (prevStatusRef.current === "streaming" && status === "ready") {
+      if (turnStartTimeRef.current) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role !== "user" && !msgDurationsRef.current[lastMsg.id]) {
+          const elapsed = Number(((Date.now() - turnStartTimeRef.current) / 1000).toFixed(1));
+          msgDurationsRef.current[lastMsg.id] = Math.max(0.2, elapsed);
+        }
+        turnStartTimeRef.current = null;
+      }
       onTriggerWorkspaceRefresh?.();
     }
     prevStatusRef.current = status;
-  }, [status, onTriggerWorkspaceRefresh]);
+  }, [status, messages, onTriggerWorkspaceRefresh]);
 
   const [draft, setDraft] = useState("");
   const busy = status === "submitted" || status === "streaming";
@@ -3414,6 +3498,11 @@ function Chat({
   const submit = () => {
     const text = draft.trim();
     if (!text || busy) return;
+    if (!activeProvider || !activeProvider.endpoint || !activeProvider.selectedModel) {
+      onOpenSettings();
+      return;
+    }
+    turnStartTimeRef.current = Date.now();
     setDismissedError(null);
     clearError?.();
     if (!titled.current) {
@@ -3425,6 +3514,7 @@ function Chat({
   };
 
   const handleRetry = () => {
+    turnStartTimeRef.current = Date.now();
     setDismissedError(null);
     clearError?.();
     if (regenerate) {
@@ -3460,6 +3550,7 @@ function Chat({
                       titled.current = true;
                       onFirstMessage(h);
                     }
+                    turnStartTimeRef.current = Date.now();
                     sendMessage({ text: h });
                   }}
                 >
@@ -3484,6 +3575,10 @@ function Chat({
                     // the stream is live; after the turn ends it renders as a
                     // completed CoT block.
                     const activelyThinking = busy && isLast;
+                    const responseText = mainText || textOf(m);
+                    const fullText = (thoughtText ? `<think>\n${thoughtText}\n</think>\n\n` : "") + responseText;
+                    const durationSec = msgDurationsRef.current[m.id];
+
                     return (
                       <>
                         <ToolBits message={m} />
@@ -3497,6 +3592,9 @@ function Chat({
                           <Markdown text={mainText} />
                         ) : isThinking || (busy && isLast) ? null : (
                           <Markdown text={textOf(m)} />
+                        )}
+                        {!activelyThinking && responseText && (
+                          <MessageMetaFooter rawText={fullText} durationSec={durationSec} />
                         )}
                       </>
                     );
@@ -3619,11 +3717,14 @@ function AppInner() {
 
     cloudListProviders()
       .then((cloudProvidersRes) => {
-        const cloudProviders = cloudProvidersRes.providers || [];
-        if (!cancelled && cloudProviders.length) {
+        const cloudProviders = (cloudProvidersRes.providers || []).filter((p) => p.id !== "cf-default");
+        if (!cancelled) {
           setProviders(cloudProviders);
           saveLocalProviders(cloudProviders);
-          const activeItem = cloudProviders.find((p) => p.isDefault) || cloudProviders[0];
+          const activeItem =
+            (cloudProvidersRes.activeId && cloudProviders.find((p) => p.id === cloudProvidersRes.activeId)) ||
+            cloudProviders.find((p) => p.isDefault) ||
+            cloudProviders[0];
           if (activeItem) {
             setActiveProviderId(activeItem.id);
             saveActiveProviderId(activeItem.id);
@@ -3664,16 +3765,13 @@ function AppInner() {
     };
   }, []);
 
-  const activeProvider =
-    providers.find((p) => p.id === activeProviderId) || providers[0] || DEFAULT_PRESET;
+  const activeProvider = providers.find((p) => p.id === activeProviderId) || providers[0];
 
   const handleSelectActiveProvider = (id: string) => {
     setActiveProviderId(id);
     saveActiveProviderId(id);
-    setProviders((prev) => {
-      const next = prev.map((p) => ({ ...p, isDefault: p.id === id }));
-      saveLocalProviders(next);
-      return next;
+    cloudSetActiveProvider(id).catch((err) => {
+      console.error("Failed to sync active provider with cloud:", err);
     });
   };
 
@@ -3690,12 +3788,19 @@ function AppInner() {
   };
 
   const handleSaveProviders = (nextProviders: ProviderConfig[], newActiveId?: string) => {
-    setProviders(nextProviders);
-    if (newActiveId) {
+    const clean = nextProviders.filter((p) => p.id !== "cf-default");
+    setProviders(clean);
+    if (newActiveId !== undefined) {
       setActiveProviderId(newActiveId);
       saveActiveProviderId(newActiveId);
+      if (newActiveId) {
+        cloudSetActiveProvider(newActiveId).catch(() => {});
+      }
     }
-    saveLocalProviders(nextProviders);
+    saveLocalProviders(clean);
+    cloudSaveAllProviders(clean).catch((err) => {
+      console.error("Failed to sync providers with cloud:", err);
+    });
   };
 
   const handleSaveMcpServers = async (nextServers: McpServerConfig[]) => {
