@@ -649,6 +649,65 @@ function ImageIcon() {
   );
 }
 
+function LayersIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </svg>
+  );
+}
+
+function ActivityIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  );
+}
+
+function NetworkIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="16" y="16" width="6" height="6" rx="1" />
+      <rect x="2" y="16" width="6" height="6" rx="1" />
+      <rect x="9" y="2" width="6" height="6" rx="1" />
+      <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" />
+      <path d="M12 12V8" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  );
+}
+
+function CompassIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
+
 function FileTextIcon() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -2785,14 +2844,1113 @@ function SystemPromptEditor({
   );
 }
 
-/* ---------------- Mnemosyne Zero-Cloud Memory Panel ---------------- */
+/* ---------------- Mnemosyne Full Intelligence Dashboard ---------------- */
+
+function MnemosyneFullDashboard({
+  onClose,
+  config,
+  onSaveConfig,
+}: {
+  onClose: () => void;
+  config: MnemosyneConfig;
+  onSaveConfig: (updated: MnemosyneConfig) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<
+    "overview" | "today" | "context_bank" | "graph" | "debugger" | "activity" | "settings"
+  >("overview");
+
+  const [stats, setStats] = useState<MnemosyneStats | null>(null);
+  const [memories, setMemories] = useState<EpisodicMemoryItem[]>([]);
+  const [triples, setTriples] = useState<TripleItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchFilter, setSearchFilter] = useState("");
+  const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // Detail Modal
+  const [inspectMemory, setInspectMemory] = useState<EpisodicMemoryItem | null>(null);
+
+  // Forms
+  const [showAddMemModal, setShowAddMemModal] = useState(false);
+  const [showAddTripleModal, setShowAddTripleModal] = useState(false);
+
+  // New Memory Form
+  const [newContent, setNewContent] = useState("");
+  const [newImportance, setNewImportance] = useState(0.8);
+  const [isWorkingMem, setIsWorkingMem] = useState(false);
+  const [ttlSec, setTtlSec] = useState("");
+
+  // New Triple Form
+  const [newSubj, setNewSubj] = useState("");
+  const [newPred, setNewPred] = useState("");
+  const [newObj, setNewObj] = useState("");
+
+  // Debugger Form
+  const [debugQuery, setDebugQuery] = useState("");
+  const [debugResult, setDebugResult] = useState<MnemosyneRecallResult | null>(null);
+  const [debugging, setDebugging] = useState(false);
+
+  // Settings
+  const [enabled, setEnabled] = useState(config.enabled ?? true);
+  const [autoRecall, setAutoRecall] = useState(config.autoRecall ?? true);
+  const [autoRetain, setAutoRetain] = useState(config.autoRetain ?? true);
+  const [recallTopK, setRecallTopK] = useState(config.recallTopK || 5);
+  const [scope, setScope] = useState(config.scope || "global");
+
+  const refreshData = async () => {
+    setLoading(true);
+    try {
+      const [s, m, t] = await Promise.all([
+        cloudGetMnemosyneStats().catch(() => null),
+        cloudListMnemosyneMemories().catch(() => []),
+        cloudListMnemosyneTriples().catch(() => []),
+      ]);
+      if (s) setStats(s);
+      setMemories(m);
+      setTriples(t);
+    } catch (err: any) {
+      console.error("Failed to load Mnemosyne data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+  }, []);
+
+  // Compute Context Bank Inferred Sections
+  const contextBank = useMemo(() => {
+    const userPrefs: EpisodicMemoryItem[] = [];
+    const techStack: EpisodicMemoryItem[] = [];
+    const rulesDecisions: EpisodicMemoryItem[] = [];
+    const generalFacts: EpisodicMemoryItem[] = [];
+
+    for (const m of memories) {
+      const text = m.content.toLowerCase();
+      if (
+        text.includes("prefer") ||
+        text.includes("like") ||
+        text.includes("user") ||
+        text.includes("theme") ||
+        text.includes("language") ||
+        text.includes("ui") ||
+        text.includes("style")
+      ) {
+        userPrefs.push(m);
+      } else if (
+        text.includes("cloudflare") ||
+        text.includes("react") ||
+        text.includes("python") ||
+        text.includes("typescript") ||
+        text.includes("api") ||
+        text.includes("sqlite") ||
+        text.includes("worker") ||
+        text.includes("durable object")
+      ) {
+        techStack.push(m);
+      } else if (
+        text.includes("must") ||
+        text.includes("always") ||
+        text.includes("never") ||
+        text.includes("rule") ||
+        text.includes("decision") ||
+        text.includes("constraint")
+      ) {
+        rulesDecisions.push(m);
+      } else {
+        generalFacts.push(m);
+      }
+    }
+
+    return { userPrefs, techStack, rulesDecisions, generalFacts };
+  }, [memories]);
+
+  // Compute Today's Digest
+  const todayDigest = useMemo(() => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayMems = memories.filter((m) => m.createdAt >= startOfToday.getTime());
+    const highSalience = memories.filter((m) => (m.importance || 0.7) >= 0.8);
+    return {
+      addedToday: todayMems.length,
+      todayMems,
+      highSalienceCount: highSalience.length,
+    };
+  }, [memories]);
+
+  const filteredMemories = useMemo(() => {
+    if (!searchFilter.trim()) return memories;
+    const q = searchFilter.toLowerCase();
+    return memories.filter(
+      (m) =>
+        m.content.toLowerCase().includes(q) ||
+        (m.scope && m.scope.toLowerCase().includes(q)) ||
+        (m.source && m.source.toLowerCase().includes(q))
+    );
+  }, [memories, searchFilter]);
+
+  const handleAddMemory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newContent.trim()) return;
+    try {
+      await cloudRememberMnemosyne({
+        content: newContent.trim(),
+        importance: Number(newImportance),
+        isWorkingMemory: isWorkingMem,
+        ttlSeconds: ttlSec ? Number(ttlSec) : undefined,
+      });
+      setNewContent("");
+      setShowAddMemModal(false);
+      setStatusMsg({ type: "ok", text: "Memory successfully remembered!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: err.message || "Failed to add memory" });
+    }
+  };
+
+  const handleAddTriple = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubj.trim() || !newPred.trim() || !newObj.trim()) return;
+    try {
+      const res = await fetch("/api/mnemosyne/triples", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          subject: newSubj.trim(),
+          predicate: newPred.trim(),
+          object: newObj.trim(),
+        }),
+      });
+      const data = (await res.json()) as any;
+      if (!data.ok) throw new Error(data.error);
+      setNewSubj("");
+      setNewPred("");
+      setNewObj("");
+      setShowAddTripleModal(false);
+      setStatusMsg({ type: "ok", text: "Knowledge Graph triple added!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: err.message || "Failed to add triple" });
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this memory?")) return;
+    try {
+      await cloudDeleteMnemosyneMemory(id);
+      refreshData();
+      if (inspectMemory?.id === id) setInspectMemory(null);
+    } catch (err: any) {
+      alert("Failed to delete memory: " + err.message);
+    }
+  };
+
+  const handleDeleteTriple = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this triple?")) return;
+    try {
+      await cloudDeleteMnemosyneTriple(id);
+      refreshData();
+    } catch (err: any) {
+      alert("Failed to delete triple: " + err.message);
+    }
+  };
+
+  const handleRunRecallTest = async () => {
+    if (!debugQuery.trim()) return;
+    setDebugging(true);
+    try {
+      const res = await cloudRecallMnemosyne(debugQuery.trim(), Number(recallTopK) || 5);
+      setDebugResult(res);
+    } catch (err: any) {
+      alert("Recall test failed: " + err.message);
+    } finally {
+      setDebugging(false);
+    }
+  };
+
+  const handleConsolidate = async () => {
+    try {
+      const count = await cloudConsolidateMnemosyne();
+      setStatusMsg({ type: "ok", text: `Consolidated ${count} working memory item(s) into episodic summaries.` });
+      setTimeout(() => setStatusMsg(null), 4000);
+      refreshData();
+    } catch (err: any) {
+      alert("Consolidation failed: " + err.message);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated: MnemosyneConfig = {
+      enabled,
+      autoRecall,
+      autoRetain,
+      recallTopK: Number(recallTopK) || 5,
+      scope: scope.trim() || "global",
+      updatedAt: Date.now(),
+    };
+    onSaveConfig(updated);
+    try {
+      await cloudSaveMnemosyneConfig(updated);
+      setStatusMsg({ type: "ok", text: "Mnemosyne settings saved to Cloudflare DO SQLite!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: err.message || "Failed to save configuration" });
+    }
+  };
+
+  const handleExportJSON = () => {
+    const data = {
+      exportDate: new Date().toISOString(),
+      stats,
+      memories,
+      triples,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mnemosyne-memories-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm("⚠️ Are you sure you want to clear ALL memories and Knowledge Graph triples? This action is irreversible.")) return;
+    try {
+      await cloudClearMnemosyne("all");
+      setStatusMsg({ type: "ok", text: "All Mnemosyne memories cleared." });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
+    } catch (err: any) {
+      alert("Clear failed: " + err.message);
+    }
+  };
+
+  return (
+    <div className="mnemosyne-dashboard-page">
+      {/* Top Navigation Bar */}
+      <header className="mnemosyne-dashboard-header">
+        <div className="dashboard-header-left">
+          <div className="dashboard-logo">
+            <BrainIcon />
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h2 className="dashboard-title">Mnemosyne Memory Intelligence</h2>
+              <span className="badge badge-connected" style={{ fontSize: 11 }}>
+                Cloudflare DO SQLite
+              </span>
+              <span className="badge badge-memory" style={{ fontSize: 11 }}>
+                Workers AI BAAI-bge
+              </span>
+            </div>
+            <p className="dashboard-subtitle">
+              Universal BEAM memory layer (Episodic Associative Memory + Temporal Knowledge Graph). 100% serverless at the Cloudflare edge.
+            </p>
+          </div>
+        </div>
+
+        <div className="dashboard-header-actions">
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={refreshData}
+            disabled={loading}
+            title="Refresh memory state"
+          >
+            {loading ? <span className="spinner" /> : <RefreshIcon />}
+            <span>Refresh</span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={handleConsolidate}
+            title="Synthesize and consolidate working memories into long-term summaries"
+          >
+            <SparklesIcon />
+            <span>Consolidate (Sleep)</span>
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            onClick={() => setShowAddMemModal(true)}
+          >
+            <PlusIcon />
+            <span>Add Memory</span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={onClose}
+            style={{ fontWeight: 600 }}
+          >
+            <span>← Back to Chat</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Global Status Banner */}
+      {statusMsg && (
+        <div className={`banner-msg ${statusMsg.type}`} style={{ margin: "0 24px 12px" }}>
+          {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
+          <span>{statusMsg.text}</span>
+        </div>
+      )}
+
+      {/* Primary Tab Navigation */}
+      <nav className="mnemosyne-dashboard-nav">
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "overview" ? "active" : ""}`}
+          onClick={() => setActiveTab("overview")}
+        >
+          <MonitorIcon />
+          <span>Overview</span>
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "today" ? "active" : ""}`}
+          onClick={() => setActiveTab("today")}
+        >
+          <CalendarIcon />
+          <span>Today</span>
+          {todayDigest.addedToday > 0 && (
+            <span className="dash-nav-badge">{todayDigest.addedToday}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "context_bank" ? "active" : ""}`}
+          onClick={() => setActiveTab("context_bank")}
+        >
+          <LayersIcon />
+          <span>Context Bank</span>
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "graph" ? "active" : ""}`}
+          onClick={() => setActiveTab("graph")}
+        >
+          <NetworkIcon />
+          <span>Knowledge Graph</span>
+          <span className="dash-nav-badge">{triples.length}</span>
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "debugger" ? "active" : ""}`}
+          onClick={() => setActiveTab("debugger")}
+        >
+          <CompassIcon />
+          <span>BEAM Debugger</span>
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "activity" ? "active" : ""}`}
+          onClick={() => setActiveTab("activity")}
+        >
+          <ActivityIcon />
+          <span>Activity</span>
+        </button>
+        <button
+          type="button"
+          className={`dash-nav-btn ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => setActiveTab("settings")}
+        >
+          <SettingsIcon />
+          <span>Settings & Safe Ops</span>
+        </button>
+      </nav>
+
+      {/* Main Content Area */}
+      <main className="mnemosyne-dashboard-body">
+        {/* TAB 1: OVERVIEW */}
+        {activeTab === "overview" && (
+          <div className="dash-section-grid">
+            {/* 4 Stat Cards */}
+            <div className="dash-stats-row">
+              <div className="dash-stat-box">
+                <span className="dash-stat-label">Episodic Memories</span>
+                <span className="dash-stat-value">{stats?.totalEpisodic ?? memories.length}</span>
+                <span className="dash-stat-sub">Long-term associative facts</span>
+              </div>
+              <div className="dash-stat-box">
+                <span className="dash-stat-label">Working Context</span>
+                <span className="dash-stat-value">{stats?.totalWorking ?? 0}</span>
+                <span className="dash-stat-sub">Hot temporary session facts</span>
+              </div>
+              <div className="dash-stat-box">
+                <span className="dash-stat-label">KG Triples</span>
+                <span className="dash-stat-value">{stats?.totalTriples ?? triples.length}</span>
+                <span className="dash-stat-sub">Structured entity relationships</span>
+              </div>
+              <div className="dash-stat-box">
+                <span className="dash-stat-label">BEAM Formula</span>
+                <span className="dash-stat-value" style={{ fontSize: 17, color: "var(--ok)" }}>
+                  50% Vec + 30% FTS
+                </span>
+                <span className="dash-stat-sub">15% Salience + 5% Recency</span>
+              </div>
+            </div>
+
+            {/* Quick Actions & Search */}
+            <div className="dash-filter-row">
+              <div className="input-search-wrapper" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="Search memories, entity concepts, scopes..."
+                  value={searchFilter}
+                  onChange={(e) => setSearchFilter(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => setShowAddTripleModal(true)}
+              >
+                <PlusIcon />
+                <span>Add KG Triple</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={handleExportJSON}
+                title="Export memories as JSON"
+              >
+                <DownloadIcon />
+                <span>Export JSON</span>
+              </button>
+            </div>
+
+            {/* Memories List */}
+            <div className="dash-card">
+              <div className="dash-card-head">
+                <h3 className="dash-card-title">
+                  All Active Memories ({filteredMemories.length})
+                </h3>
+              </div>
+
+              {filteredMemories.length === 0 ? (
+                <div className="empty-card" style={{ padding: "36px 16px", textAlign: "center" }}>
+                  <p style={{ margin: "0 0 12px", color: "var(--muted)" }}>
+                    No memories match your filter. The agent will proactively form memories during conversations.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm"
+                    onClick={() => setShowAddMemModal(true)}
+                  >
+                    + Add New Memory
+                  </button>
+                </div>
+              ) : (
+                <div className="dash-memories-feed">
+                  {filteredMemories.map((m) => (
+                    <div
+                      key={m.id}
+                      className="dash-memory-item"
+                      onClick={() => setInspectMemory(m)}
+                    >
+                      <div className="dash-memory-content">
+                        <span className="dash-memory-text">{m.content}</span>
+                        <div className="dash-memory-meta">
+                          <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                            {((m.importance || 0.7) * 100).toFixed(0)}% Salience
+                          </span>
+                          <span className="dash-tag">Scope: {m.scope}</span>
+                          <span className="dash-tag">Accessed: {m.accessCount || 0}x</span>
+                          <span className="dash-tag">
+                            {new Date(m.createdAt).toLocaleDateString()} {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="dash-memory-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="btn-text-del"
+                          onClick={() => handleDeleteMemory(m.id)}
+                          title="Delete memory"
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: TODAY */}
+        {activeTab === "today" && (
+          <div className="dash-section-grid">
+            <div className="dash-hero-banner">
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div className="dash-hero-icon">
+                  <CalendarIcon />
+                </div>
+                <div>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
+                    Today's Memory Digest
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                    {todayDigest.addedToday} memories formed today · {todayDigest.highSalienceCount} high-salience permanent facts in active storage.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="dash-card">
+              <div className="dash-card-head">
+                <h3 className="dash-card-title">Memories Formed Today ({todayDigest.todayMems.length})</h3>
+              </div>
+
+              {todayDigest.todayMems.length === 0 ? (
+                <div className="empty-card" style={{ padding: "32px 16px", textAlign: "center" }}>
+                  <p style={{ color: "var(--muted)", margin: 0 }}>
+                    No new memories formed yet today. As you chat with the agent, key decisions and preferences will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="dash-memories-feed">
+                  {todayDigest.todayMems.map((m) => (
+                    <div key={m.id} className="dash-memory-item">
+                      <div className="dash-memory-content">
+                        <span className="dash-memory-text">{m.content}</span>
+                        <div className="dash-memory-meta">
+                          <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                            {((m.importance || 0.7) * 100).toFixed(0)}% Salience
+                          </span>
+                          <span className="dash-tag">
+                            {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: CONTEXT BANK */}
+        {activeTab === "context_bank" && (
+          <div className="dash-section-grid">
+            <div className="dash-hero-banner">
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div className="dash-hero-icon">
+                  <LayersIcon />
+                </div>
+                <div>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
+                    Context Bank & Inferred Profile
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                    Automatically synthesized user persona, tech stack preferences, and architectural rules derived from active memory items.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="context-bank-grid">
+              {/* Card 1: User Preferences */}
+              <div className="context-bank-card">
+                <div className="context-bank-card-head">
+                  <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+                    👤 User Preferences & Persona
+                  </h4>
+                  <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                    {contextBank.userPrefs.length} Items
+                  </span>
+                </div>
+                <div className="context-bank-items">
+                  {contextBank.userPrefs.length === 0 ? (
+                    <p style={{ fontSize: 12.5, color: "var(--muted)", margin: 0 }}>No user preferences recorded yet.</p>
+                  ) : (
+                    contextBank.userPrefs.map((m) => (
+                      <div key={m.id} className="context-bank-item">
+                        {m.content}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Card 2: Tech Stack & Architecture */}
+              <div className="context-bank-card">
+                <div className="context-bank-card-head">
+                  <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+                    💻 Tech Stack & Systems
+                  </h4>
+                  <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                    {contextBank.techStack.length} Items
+                  </span>
+                </div>
+                <div className="context-bank-items">
+                  {contextBank.techStack.length === 0 ? (
+                    <p style={{ fontSize: 12.5, color: "var(--muted)", margin: 0 }}>No tech stack preferences recorded yet.</p>
+                  ) : (
+                    contextBank.techStack.map((m) => (
+                      <div key={m.id} className="context-bank-item">
+                        {m.content}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Card 3: Key Decisions & Constraints */}
+              <div className="context-bank-card">
+                <div className="context-bank-card-head">
+                  <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+                    📌 Rules, Decisions & Constraints
+                  </h4>
+                  <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                    {contextBank.rulesDecisions.length} Items
+                  </span>
+                </div>
+                <div className="context-bank-items">
+                  {contextBank.rulesDecisions.length === 0 ? (
+                    <p style={{ fontSize: 12.5, color: "var(--muted)", margin: 0 }}>No operational rules recorded yet.</p>
+                  ) : (
+                    contextBank.rulesDecisions.map((m) => (
+                      <div key={m.id} className="context-bank-item">
+                        {m.content}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Card 4: General Facts */}
+              <div className="context-bank-card">
+                <div className="context-bank-card-head">
+                  <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+                    🌐 General Long-Term Facts
+                  </h4>
+                  <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                    {contextBank.generalFacts.length} Items
+                  </span>
+                </div>
+                <div className="context-bank-items">
+                  {contextBank.generalFacts.length === 0 ? (
+                    <p style={{ fontSize: 12.5, color: "var(--muted)", margin: 0 }}>No general facts recorded yet.</p>
+                  ) : (
+                    contextBank.generalFacts.map((m) => (
+                      <div key={m.id} className="context-bank-item">
+                        {m.content}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: KNOWLEDGE GRAPH */}
+        {activeTab === "graph" && (
+          <div className="dash-section-grid">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                Structured entity relationships represented as <code>(Subject) ──[predicate]──&gt; (Object)</code> triples.
+              </p>
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={() => setShowAddTripleModal(true)}
+              >
+                <PlusIcon />
+                <span>+ Add Triple</span>
+              </button>
+            </div>
+
+            {triples.length === 0 ? (
+              <div className="empty-card" style={{ padding: "36px 16px", textAlign: "center" }}>
+                <p style={{ color: "var(--muted)", margin: "0 0 12px" }}>
+                  No Knowledge Graph triples found.
+                </p>
+                <button
+                  type="button"
+                  className="btn-primary btn-sm"
+                  onClick={() => setShowAddTripleModal(true)}
+                >
+                  + Add First Triple
+                </button>
+              </div>
+            ) : (
+              <div className="kg-triples-grid">
+                {triples.map((t) => (
+                  <div key={t.id} className="kg-triple-card">
+                    <div className="kg-triple-body">
+                      <div className="kg-node subject-node">{t.subject}</div>
+                      <div className="kg-edge">
+                        <span className="kg-edge-label">{t.predicate}</span>
+                        <div className="kg-arrow">───►</div>
+                      </div>
+                      <div className="kg-node object-node">{t.object}</div>
+                    </div>
+                    <div className="kg-triple-foot">
+                      <span className="dash-tag">
+                        {t.validUntil ? `Valid until: ${t.validUntil}` : "Perpetual"}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-text-del"
+                        onClick={() => handleDeleteTriple(t.id)}
+                        title="Delete triple"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 5: BEAM DEBUGGER */}
+        {activeTab === "debugger" && (
+          <div className="dash-section-grid">
+            <div className="dash-card" style={{ padding: 18 }}>
+              <h3 className="dash-card-title" style={{ marginBottom: 12 }}>
+                BEAM Hybrid Recall Simulator
+              </h3>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--muted)" }}>
+                Simulate how Mnemosyne ranks memories when the user sends a message. The BEAM algorithm combines Cloudflare Workers AI vector embeddings, FTS5 BM25, importance salience, and recency decay.
+              </p>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <input
+                  type="text"
+                  className="text-input"
+                  style={{ flex: 1 }}
+                  placeholder="Enter a test prompt (e.g. 'What tools and libraries do we use?')"
+                  value={debugQuery}
+                  onChange={(e) => setDebugQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleRunRecallTest()}
+                />
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleRunRecallTest}
+                  disabled={debugging || !debugQuery.trim()}
+                >
+                  {debugging ? <span className="spinner" /> : <SparklesIcon />}
+                  <span>Test BEAM Recall</span>
+                </button>
+              </div>
+
+              {debugResult && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <h4 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
+                      Formatted Context Payload (Injected into System Prompt):
+                    </h4>
+                    <pre className="dash-code-block">
+                      {debugResult.formattedContext || "No matching memories retrieved."}
+                    </pre>
+                  </div>
+
+                  {debugResult.memories.length > 0 && (
+                    <div>
+                      <h4 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
+                        BEAM Score Breakdown ({debugResult.memories.length} matches):
+                      </h4>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {debugResult.memories.map((m) => (
+                          <div key={m.id} className="dash-score-card">
+                            <div style={{ fontSize: 13.5, color: "var(--ink)", fontWeight: 500 }}>
+                              {m.content}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                              <span className="badge badge-connected" style={{ fontSize: 10.5 }}>
+                                BEAM Total Match: {((m.score || 0) * 100).toFixed(1)}%
+                              </span>
+                              <span className="dash-tag">Scope: {m.scope}</span>
+                              <span className="dash-tag">Salience: {((m.importance || 0.7) * 100).toFixed(0)}%</span>
+                              <span className="dash-tag">Accesses: {m.accessCount || 0}x</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: ACTIVITY */}
+        {activeTab === "activity" && (
+          <div className="dash-section-grid">
+            <div className="dash-card">
+              <div className="dash-card-head">
+                <h3 className="dash-card-title">Memory Activity Timeline</h3>
+              </div>
+
+              <div className="dash-timeline-feed">
+                {memories.map((m) => (
+                  <div key={m.id} className="dash-timeline-item">
+                    <div className="dash-timeline-dot" />
+                    <div className="dash-timeline-content">
+                      <div style={{ fontSize: 13.5, color: "var(--ink)" }}>{m.content}</div>
+                      <div className="dash-memory-meta" style={{ marginTop: 4 }}>
+                        <span className="dash-tag">{new Date(m.createdAt).toLocaleString()}</span>
+                        <span className="dash-tag">Source: {m.source || "agent_tool"}</span>
+                        <span className="dash-tag">Salience: {((m.importance || 0.7) * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 7: SETTINGS & SAFE OPS */}
+        {activeTab === "settings" && (
+          <div className="dash-section-grid">
+            <form onSubmit={handleSaveSettings} className="dash-card" style={{ padding: 18 }}>
+              <h3 className="dash-card-title" style={{ marginBottom: 14 }}>
+                Execution Controls & Dual-Loop Configuration
+              </h3>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+                <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={autoRecall}
+                    onChange={(e) => setAutoRecall(e.target.checked)}
+                  />
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Pre-Inference Auto-Recall</span>
+                    <p style={{ fontSize: 11.5, color: "var(--muted)", margin: "2px 0 0" }}>
+                      Injects relevant memory context before model reasoning
+                    </p>
+                  </div>
+                </label>
+
+                <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={autoRetain}
+                    onChange={(e) => setAutoRetain(e.target.checked)}
+                  />
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Post-Turn Auto-Retain</span>
+                    <p style={{ fontSize: 11.5, color: "var(--muted)", margin: "2px 0 0" }}>
+                      Asynchronously commits turn highlights in background
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+                <div className="form-group">
+                  <label className="form-label">
+                    Recall Top-K Results: {recallTopK}
+                  </label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="15"
+                    value={recallTopK}
+                    onChange={(e) => setRecallTopK(Number(e.target.value))}
+                    style={{ width: "100%", accentColor: "var(--accent)" }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Default Memory Scope</label>
+                  <input
+                    type="text"
+                    className="text-input"
+                    value={scope}
+                    onChange={(e) => setScope(e.target.value)}
+                    placeholder="global"
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button type="submit" className="btn-primary">
+                  Save Mnemosyne Settings
+                </button>
+              </div>
+            </form>
+
+            <div className="dash-card" style={{ padding: 18 }}>
+              <h3 className="dash-card-title" style={{ color: "var(--err)", marginBottom: 10 }}>
+                Danger Zone & Database Maintenance
+              </h3>
+              <p style={{ fontSize: 12.5, color: "var(--muted)", margin: "0 0 14px" }}>
+                Purging memories will erase all episodic facts and knowledge graph triples from Cloudflare DO SQLite.
+              </p>
+              <button type="button" className="btn-secondary btn-sm" onClick={handleClearAll} style={{ color: "var(--err)" }}>
+                Clear All Memories
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Add Memory Modal */}
+      {showAddMemModal && (
+        <div className="modal-backdrop" onClick={() => setShowAddMemModal(false)}>
+          <div className="dash-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dash-dialog-head">
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Add New Memory</h3>
+              <button type="button" className="ghost" onClick={() => setShowAddMemModal(false)}>
+                <XIcon />
+              </button>
+            </div>
+            <form onSubmit={handleAddMemory} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Memory Content</label>
+                <textarea
+                  className="text-input"
+                  rows={3}
+                  placeholder="e.g. User prefers clean React code with Tailwind or custom CSS."
+                  value={newContent}
+                  onChange={(e) => setNewContent(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">
+                  Importance / Salience: {((newImportance || 0.7) * 100).toFixed(0)}%
+                </label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.05"
+                  value={newImportance}
+                  onChange={(e) => setNewImportance(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "var(--accent)" }}
+                />
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={isWorkingMem}
+                  onChange={(e) => setIsWorkingMem(e.target.checked)}
+                />
+                <span style={{ fontSize: 13 }}>Working Memory (Temporary hot context with TTL)</span>
+              </label>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                <button type="button" className="btn-secondary" onClick={() => setShowAddMemModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary">
+                  Commit Memory
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Triple Modal */}
+      {showAddTripleModal && (
+        <div className="modal-backdrop" onClick={() => setShowAddTripleModal(false)}>
+          <div className="dash-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dash-dialog-head">
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Add Knowledge Graph Triple</h3>
+              <button type="button" className="ghost" onClick={() => setShowAddTripleModal(false)}>
+                <XIcon />
+              </button>
+            </div>
+            <form onSubmit={handleAddTriple} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Subject</label>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="e.g. User"
+                  value={newSubj}
+                  onChange={(e) => setNewSubj(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Predicate</label>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="e.g. prefers"
+                  value={newPred}
+                  onChange={(e) => setNewPred(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Object</label>
+                <input
+                  type="text"
+                  className="text-input"
+                  placeholder="e.g. Dark Mode"
+                  value={newObj}
+                  onChange={(e) => setNewObj(e.target.value)}
+                  required
+                />
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                <button type="button" className="btn-secondary" onClick={() => setShowAddTripleModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary">
+                  Add Triple
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Inspect Memory Detail Modal */}
+      {inspectMemory && (
+        <div className="modal-backdrop" onClick={() => setInspectMemory(null)}>
+          <div className="dash-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dash-dialog-head">
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Memory Raw Inspector</h3>
+              <button type="button" className="ghost" onClick={() => setInspectMemory(null)}>
+                <XIcon />
+              </button>
+            </div>
+            <pre className="dash-code-block" style={{ maxHeight: 280, overflowY: "auto" }}>
+              {JSON.stringify(inspectMemory, null, 2)}
+            </pre>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button type="button" className="btn-secondary" onClick={() => setInspectMemory(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Mnemosyne Zero-Cloud Memory Panel (Modal tab) ---------------- */
 
 function MnemosyneMemoryPanel({
   config,
   onSaveConfig,
+  onOpenFullDashboard,
 }: {
   config: MnemosyneConfig;
   onSaveConfig: (updated: MnemosyneConfig) => void;
+  onOpenFullDashboard?: () => void;
 }) {
   const [enabled, setEnabled] = useState(config.enabled ?? true);
   const [autoRecall, setAutoRecall] = useState(config.autoRecall ?? true);
@@ -2982,14 +4140,27 @@ function MnemosyneMemoryPanel({
               Universal BEAM memory layer (Working Memory + Episodic Memory with Hybrid Vector/FTS scoring + Temporal Knowledge Graph). Runs 100% serverless at the Cloudflare edge without external dependencies.
             </p>
           </div>
-          <label className="toggle-switch" title={enabled ? "Disable Mnemosyne Memory" : "Enable Mnemosyne Memory"}>
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            <span className="toggle-slider" />
-          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {onOpenFullDashboard && (
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                onClick={onOpenFullDashboard}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <CompassIcon />
+                <span>Open Full Intelligence Dashboard</span>
+              </button>
+            )}
+            <label className="toggle-switch" title={enabled ? "Disable Mnemosyne Memory" : "Enable Mnemosyne Memory"}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              <span className="toggle-slider" />
+            </label>
+          </div>
         </div>
       </div>
 
@@ -3399,6 +4570,7 @@ function SettingsModal({
   onSaveMcpServers,
   mnemosyneConfig,
   onSaveMnemosyneConfig,
+  onOpenFullDashboard,
   customSystemPrompt,
   systemPromptMode,
   onSaveSystemPrompt,
@@ -3416,6 +4588,7 @@ function SettingsModal({
   onSaveMcpServers: (servers: McpServerConfig[]) => void;
   mnemosyneConfig: MnemosyneConfig;
   onSaveMnemosyneConfig: (config: MnemosyneConfig) => void;
+  onOpenFullDashboard?: () => void;
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
   onSaveSystemPrompt: (prompt: string, mode: "append" | "override") => void;
@@ -3830,6 +5003,7 @@ function SettingsModal({
             <MnemosyneMemoryPanel
               config={mnemosyneConfig}
               onSaveConfig={onSaveMnemosyneConfig}
+              onOpenFullDashboard={onOpenFullDashboard}
             />
           )}
 
@@ -5045,6 +6219,7 @@ function AppInner() {
 
   // Settings Modal State
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [currentView, setCurrentView] = useState<"chat" | "memory-dashboard">("chat");
 
   // Mnemosyne Zero-Cloud Memory State (Cloud DO SQLite source of truth)
   const [mnemosyneConfig, setMnemosyneConfig] = useState<MnemosyneConfig>({
@@ -5159,25 +6334,28 @@ function AppInner() {
   };
 
   const handleUpdateProviderReasoningEffort = (effort: "none" | "low" | "medium" | "high") => {
-    setProviders((prev) => {
-      const next = prev.map((p) => (p.id === activeProviderId ? { ...p, reasoningEffort: effort } : p));
-      saveLocalProviders(next);
-      const target = next.find((p) => p.id === activeProviderId);
-      if (target) {
-        cloudSaveProvider(target).catch(() => {});
-      }
-      return next;
+    if (!activeProvider) return;
+    const updated = providers.map((p) => (p.id === activeProvider.id ? { ...p, reasoningEffort: effort } : p));
+    setProviders(updated);
+    saveLocalProviders(updated);
+    cloudSaveProvider({ ...activeProvider, reasoningEffort: effort }).catch((err) => {
+      console.error("Failed to sync reasoning effort with cloud:", err);
     });
   };
 
   const handleSaveProviders = (nextProviders: ProviderConfig[], newActiveId?: string) => {
     const clean = nextProviders.filter((p) => p.id !== "cf-default");
     setProviders(clean);
-    if (newActiveId !== undefined) {
+    if (newActiveId) {
       setActiveProviderId(newActiveId);
       saveActiveProviderId(newActiveId);
-      if (newActiveId) {
-        cloudSetActiveProvider(newActiveId).catch(() => {});
+      cloudSetActiveProvider(newActiveId).catch(() => {});
+    } else if (!clean.some((p) => p.id === activeProviderId)) {
+      const fallbackId = clean[0]?.id;
+      if (fallbackId) {
+        setActiveProviderId(fallbackId);
+        saveActiveProviderId(fallbackId);
+        cloudSetActiveProvider(fallbackId).catch(() => {});
       }
     }
     saveLocalProviders(clean);
@@ -5216,25 +6394,25 @@ function AppInner() {
     if (window.innerWidth < 900) setSideOpen(false);
   };
 
-  useEffect(() => {
-    saveLocalConvs(convos);
-  }, [convos]);
-
   const applyCloud = (next: Convo[]) => {
     setConvos(next);
     saveLocalConvs(next);
   };
 
+  useEffect(() => {
+    saveLocalConvs(convos);
+  }, [convos]);
+
   const touch = (id: string, title?: string) => {
     const now = Date.now();
     setConvos((prev) => {
       const existing = prev.find((c) => c.id === id);
-      const entry: Convo = {
-        id,
-        title: title ?? existing?.title ?? "New chat",
-        ts: now,
-      };
-      return [entry, ...prev.filter((c) => c.id !== id)].slice(0, 30);
+      const nextTitle =
+        title && (!existing || existing.title === "New chat" || existing.title.startsWith("c-"))
+          ? title.slice(0, 48)
+          : existing?.title ?? title ?? "New chat";
+      const next = [{ id, title: nextTitle, ts: now }, ...prev.filter((c) => c.id !== id)];
+      return next.slice(0, 100);
     });
     if (cloudReady) {
       cloudTouchConvs(id, title).then(applyCloud).catch(() => {});
@@ -5256,6 +6434,7 @@ function AppInner() {
     const id = newId();
     touch(id, "New chat");
     setActive(id);
+    setCurrentView("chat");
     closeSideOnMobile();
   };
 
@@ -5276,6 +6455,15 @@ function AppInner() {
           <span className="header-wordmark">edge agent</span>
         </div>
         <div className="header-right">
+          <button
+            type="button"
+            className={`ghost header-workspace-btn ${currentView === "memory-dashboard" ? "active" : ""}`}
+            onClick={() => setCurrentView((v) => (v === "memory-dashboard" ? "chat" : "memory-dashboard"))}
+            aria-label="Memory Dashboard"
+            title="Mnemosyne Memory Dashboard"
+          >
+            <BrainIcon />
+          </button>
           <button
             type="button"
             className="btn-new-chat-header"
@@ -5337,6 +6525,16 @@ function AppInner() {
             >
               <PlusIcon />
             </button>
+            <button
+              type="button"
+              className={`ghost side-rail-new ${currentView === "memory-dashboard" ? "active" : ""}`}
+              onClick={() => setCurrentView((v) => (v === "memory-dashboard" ? "chat" : "memory-dashboard"))}
+              aria-label="Memory Dashboard"
+              title="Mnemosyne Memory Dashboard"
+              style={{ color: "var(--accent)" }}
+            >
+              <BrainIcon />
+            </button>
           </div>
           <div className="side-rail-bottom">
             <button
@@ -5380,13 +6578,26 @@ function AppInner() {
             <PlusIcon />
             New chat
           </button>
+          <button
+            type="button"
+            className={`side-item memory-nav-item ${currentView === "memory-dashboard" ? "active" : ""}`}
+            onClick={() => {
+              setCurrentView("memory-dashboard");
+              closeSideOnMobile();
+            }}
+            style={{ color: "var(--accent)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}
+          >
+            <BrainIcon />
+            <span>🧠 Memory Dashboard</span>
+          </button>
           {convos.length === 0 && <p className="side-empty">No conversations yet</p>}
           {convos.map((c) => (
             <div
               key={c.id}
-              className={"side-item" + (c.id === active ? " active" : "")}
+              className={"side-item" + (c.id === active && currentView === "chat" ? " active" : "")}
               onClick={() => {
                 setActive(c.id);
+                setCurrentView("chat");
                 closeSideOnMobile();
               }}
             >
@@ -5434,32 +6645,40 @@ function AppInner() {
       {sideOpen && <div className="tap-away" onClick={() => setSideOpen(false)} />}
       {workspaceOpen && <div className="tap-away" onClick={() => setWorkspaceOpen(false)} />}
 
-      {/* Center Main Chat */}
-      <Suspense
-        fallback={
-          <div className="page home">
-            <div className="home-inner">
-              <h1>Connecting…</h1>
-            </div>
-          </div>
-        }
-      >
-        <Chat
-          key={active}
-          convoId={active}
-          onFirstMessage={(text) => touch(active, text.slice(0, 48))}
-          activeProvider={activeProvider}
-          providers={providers}
-          onSelectProvider={handleSelectActiveProvider}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
-          mcpServers={mcpServers}
-          mnemosyneConfig={mnemosyneConfig}
-          customSystemPrompt={customSystemPrompt}
-          systemPromptMode={systemPromptMode}
-          onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
+      {/* Center Main Viewport: Chat or Mnemosyne Full Dashboard */}
+      {currentView === "memory-dashboard" ? (
+        <MnemosyneFullDashboard
+          onClose={() => setCurrentView("chat")}
+          config={mnemosyneConfig}
+          onSaveConfig={handleSaveMnemosyneConfig}
         />
-      </Suspense>
+      ) : (
+        <Suspense
+          fallback={
+            <div className="page home">
+              <div className="home-inner">
+                <h1>Connecting…</h1>
+              </div>
+            </div>
+          }
+        >
+          <Chat
+            key={active}
+            convoId={active}
+            onFirstMessage={(text) => touch(active, text.slice(0, 48))}
+            activeProvider={activeProvider}
+            providers={providers}
+            onSelectProvider={handleSelectActiveProvider}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
+            mcpServers={mcpServers}
+            mnemosyneConfig={mnemosyneConfig}
+            customSystemPrompt={customSystemPrompt}
+            systemPromptMode={systemPromptMode}
+            onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
+          />
+        </Suspense>
+      )}
 
       {/* Right Workspace Drawer */}
       <WorkspacePanel
@@ -5483,6 +6702,10 @@ function AppInner() {
         onSaveMcpServers={handleSaveMcpServers}
         mnemosyneConfig={mnemosyneConfig}
         onSaveMnemosyneConfig={handleSaveMnemosyneConfig}
+        onOpenFullDashboard={() => {
+          setSettingsOpen(false);
+          setCurrentView("memory-dashboard");
+        }}
         customSystemPrompt={customSystemPrompt}
         systemPromptMode={systemPromptMode}
         onSaveSystemPrompt={handleSaveSystemPrompt}
