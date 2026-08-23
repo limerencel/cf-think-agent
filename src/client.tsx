@@ -504,6 +504,40 @@ function PlusIcon() {
   );
 }
 
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="5.5" cy="6" r="1.2" fill="currentColor" />
+      <path d="M14 11l-3.5-3.5L4 14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function FileTextIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d="M3.5 2.5h6l3.5 3.5v7.5a1 1 0 0 1-1 1h-8.5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9.5 2.5v3.5h3.5M6 8h4M6 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M13.5 7.5l-5.8 5.8a3.18 3.18 0 0 1-4.5-4.5l6.3-6.3a2.12 2.12 0 0 1 3 3l-6.3 6.3a1.06 1.06 0 0 1-1.5-1.5l5.3-5.3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function SendIcon() {
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -1143,6 +1177,16 @@ function getFileLanguage(fileName: string): string {
   return map[ext] || "text";
 }
 
+export interface StagedAttachment {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
+  type: string;
+  previewUrl?: string;
+  isImage: boolean;
+}
+
 function getFileExtBadge(fileName: string): { label: string; color: string } {
   const ext = fileName.split(".").pop()?.toLowerCase() || "";
   switch (ext) {
@@ -1165,7 +1209,30 @@ function getFileExtBadge(fileName: string): { label: string; color: string } {
     case "sql":
       return { label: "SQL", color: "#336791" };
     case "sh":
+    case "bash":
       return { label: "SH", color: "#4EAA25" };
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "svg":
+    case "ico":
+    case "bmp":
+    case "avif":
+      return { label: "IMG", color: "#D97757" };
+    case "pdf":
+      return { label: "PDF", color: "#E74C3C" };
+    case "csv":
+      return { label: "CSV", color: "#27AE60" };
+    case "zip":
+    case "tar":
+    case "gz":
+      return { label: "ZIP", color: "#F39C12" };
+    case "rs":
+      return { label: "RS", color: "#DEA584" };
+    case "go":
+      return { label: "GO", color: "#00ADD8" };
     default:
       return { label: ext.toUpperCase().slice(0, 4) || "FILE", color: "var(--muted)" };
   }
@@ -1302,11 +1369,60 @@ function WorkspacePanel({
     }
   };
 
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleDirectUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    setUploading(true);
+    const formData = new FormData();
+    for (let i = 0; i < e.target.files.length; i++) {
+      formData.append("files", e.target.files[i], e.target.files[i].name);
+    }
+    try {
+      const res = await fetch(`/api/workspace/upload?convoId=${encodeURIComponent(convoId)}`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await res.json()) as any;
+      if (data.ok) {
+        refreshFiles(true);
+      }
+    } catch (err: any) {
+      alert("Failed to upload file to workspace: " + (err.message || String(err)));
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleDeleteFile = async (path: string) => {
+    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+    try {
+      const res = await fetch(`/api/workspace/delete?convoId=${encodeURIComponent(convoId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const data = (await res.json()) as any;
+      if (data.ok) {
+        refreshFiles(true);
+      }
+    } catch (err: any) {
+      alert("Failed to delete file: " + (err.message || String(err)));
+    }
+  };
+
   const filteredFiles = files.filter(
     (f) => !searchQuery || f.path.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const selectedFile = files.find((f) => f.path === selectedPath);
+  const isSelectedImage =
+    selectedFile &&
+    ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif"].includes(
+      selectedFile.name.split(".").pop()?.toLowerCase() || ""
+    );
   const lang = selectedFile ? getFileLanguage(selectedFile.name) : "text";
 
   return (
@@ -1321,8 +1437,25 @@ function WorkspacePanel({
           <button
             type="button"
             className="ghost side-icon-btn"
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={uploading}
+            title="Upload files to workspace"
+            aria-label="Upload files"
+          >
+            <PlusIcon />
+          </button>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={handleDirectUpload}
+          />
+          <button
+            type="button"
+            className="ghost side-icon-btn"
             onClick={() => refreshFiles(false)}
-            disabled={loading}
+            disabled={loading || uploading}
             title="Refresh workspace files"
             aria-label="Refresh"
           >
@@ -1373,7 +1506,7 @@ function WorkspacePanel({
             </div>
             <h3>Workspace is empty</h3>
             <p>
-              Files created by the agent in this session will appear here in real-time.
+              Files uploaded or created by the agent in this session will appear here in real-time.
             </p>
           </div>
         ) : (
@@ -1429,6 +1562,14 @@ function WorkspacePanel({
                       <DownloadIcon />
                       <span>Download</span>
                     </button>
+                    <button
+                      type="button"
+                      className="preview-action-btn delete-btn"
+                      onClick={() => handleDeleteFile(selectedFile.path)}
+                      title="Delete file"
+                    >
+                      <TrashIcon />
+                    </button>
                   </div>
                 </div>
               )}
@@ -1436,6 +1577,20 @@ function WorkspacePanel({
               <div className="workspace-code-container">
                 {fileLoading ? (
                   <div className="workspace-file-loading">Loading file…</div>
+                ) : isSelectedImage && selectedFile ? (
+                  <div className="workspace-image-container">
+                    <img
+                      src={`/api/workspace/raw?convoId=${encodeURIComponent(convoId)}&path=${encodeURIComponent(
+                        selectedFile.path
+                      )}`}
+                      alt={selectedFile.name}
+                      className="workspace-image-preview"
+                    />
+                    <div className="workspace-image-meta">
+                      <span>{selectedFile.name}</span>
+                      <span>{formatBytes(selectedFile.size)}</span>
+                    </div>
+                  </div>
                 ) : fileContent === null ? (
                   <div className="workspace-file-loading">Select a file to preview</div>
                 ) : (
@@ -3433,13 +3588,90 @@ function SettingsModal({
   );
 }
 
+/* ---------------- User Message with Attachments ---------------- */
+
+function UserMessageBody({ text, convoId }: { text: string; convoId: string }) {
+  // Check if text has [Attached Workspace File(s): ...] or [Uploaded Workspace File: ...]
+  const match = text.match(/^\[Attached Workspace File(?:\(s\))?:\s*([^\]]+)\]\s*\n*/i);
+
+  if (!match) {
+    return <div className="body">{text}</div>;
+  }
+
+  const rawAttachList = match[1];
+  const remainingText = text.slice(match[0].length).trim();
+
+  // Parse items separated by comma
+  const items = rawAttachList.split(/,\s*(?=\/[^\s])/).map((s) => s.trim()).filter(Boolean);
+
+  const attachments = items.map((itemStr) => {
+    const itemMatch = itemStr.match(/^(\/[^\s(]+)(?:\s*\(([^,]+),\s*([^)]+)\))?/);
+    const path = itemMatch ? itemMatch[1] : itemStr.split(" ")[0];
+    const mime = itemMatch ? itemMatch[2] : "";
+    const sizeStr = itemMatch ? itemMatch[3] : "";
+    const name = path.split("/").pop() || path;
+    const isImage =
+      (mime && mime.startsWith("image/")) ||
+      /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif)$/i.test(name);
+    return { path, name, mime, sizeStr, isImage };
+  });
+
+  return (
+    <div className="body user-message-container">
+      {attachments.length > 0 && (
+        <div className="user-msg-attachments">
+          {attachments.map((att, i) => {
+            const rawUrl = `/api/workspace/raw?convoId=${encodeURIComponent(convoId)}&path=${encodeURIComponent(att.path)}`;
+            if (att.isImage) {
+              return (
+                <div
+                  key={i}
+                  className="user-msg-img-wrap"
+                  onClick={() => window.open(rawUrl, "_blank")}
+                  title={`Click to view ${att.name}`}
+                >
+                  <img src={rawUrl} alt={att.name} />
+                  <span className="user-msg-img-name">{att.name}</span>
+                </div>
+              );
+            }
+            const badge = getFileExtBadge(att.name);
+            return (
+              <a
+                key={i}
+                href={rawUrl}
+                target="_blank"
+                rel="noreferrer"
+                download={att.name}
+                className="user-msg-file-pill"
+                title={`Download ${att.name}`}
+              >
+                <span className="file-badge" style={{ color: badge.color }}>
+                  {badge.label}
+                </span>
+                <span className="user-msg-file-name">{att.name}</span>
+                {att.sizeStr && <span className="user-msg-file-size">{att.sizeStr}</span>}
+              </a>
+            );
+          })}
+        </div>
+      )}
+      {remainingText && <div className="user-msg-text">{remainingText}</div>}
+    </div>
+  );
+}
+
 /* ---------------- Composer ---------------- */
 
 function Composer({
   draft,
   setDraft,
+  stagedFiles,
+  onAddFiles,
+  onRemoveFile,
   onSubmit,
   busy,
+  uploading,
   activeProvider,
   providers,
   onSelectProvider,
@@ -3448,8 +3680,12 @@ function Composer({
 }: {
   draft: string;
   setDraft: (v: string) => void;
+  stagedFiles: StagedAttachment[];
+  onAddFiles: (files: File[]) => void;
+  onRemoveFile: (id: string) => void;
   onSubmit: () => void;
   busy: boolean;
+  uploading?: boolean;
   activeProvider?: ProviderConfig;
   providers: ProviderConfig[];
   onSelectProvider: (id: string) => void;
@@ -3457,22 +3693,132 @@ function Composer({
   onUpdateReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 176) + "px";
-  }, [draft]);
+  }, [draft, stagedFiles]);
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+    const files: File[] = [];
+
+    if (clipboardData.files && clipboardData.files.length > 0) {
+      for (let i = 0; i < clipboardData.files.length; i++) {
+        files.push(clipboardData.files[i]);
+      }
+    } else if (clipboardData.items && clipboardData.items.length > 0) {
+      for (let i = 0; i < clipboardData.items.length; i++) {
+        const item = clipboardData.items[i];
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) {
+            if (file.name === "image.png" || !file.name) {
+              const now = new Date();
+              const timeStr = now.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+              const named = new File([file], `pasted_image_${timeStr}.png`, { type: file.type || "image/png" });
+              files.push(named);
+            } else {
+              files.push(file);
+            }
+          }
+        }
+      }
+    }
+
+    if (files.length > 0) {
+      if (!clipboardData.getData("text/plain")) {
+        e.preventDefault();
+      }
+      onAddFiles(files);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      onAddFiles(Array.from(e.dataTransfer.files));
+    }
+  };
 
   return (
-    <div className="composer">
+    <div
+      className={`composer ${isDragging ? "drag-over" : ""}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onPaste={handlePaste}
+    >
+      {/* Gemini-like small attachment preview cards */}
+      {stagedFiles.length > 0 && (
+        <div className="composer-attachments-preview">
+          {stagedFiles.map((att) => (
+            <div
+              key={att.id}
+              className={`composer-attach-card ${att.isImage ? "is-image" : "is-file"}`}
+              title={`${att.name} (${formatBytes(att.size)})`}
+            >
+              {att.isImage && att.previewUrl ? (
+                <div className="composer-attach-thumb">
+                  <img src={att.previewUrl} alt={att.name} />
+                </div>
+              ) : (
+                <div className="composer-attach-file-info">
+                  <span className="file-badge" style={{ color: getFileExtBadge(att.name).color }}>
+                    {getFileExtBadge(att.name).label}
+                  </span>
+                  <div className="composer-attach-meta">
+                    <span className="composer-attach-name">{att.name}</span>
+                    <span className="composer-attach-size">{formatBytes(att.size)}</span>
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                className="composer-attach-del"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemoveFile(att.id);
+                }}
+                title="Remove attachment"
+                aria-label="Remove attachment"
+              >
+                <XIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
         ref={ref}
         rows={1}
         value={draft}
-        placeholder="How can I help you today?"
+        placeholder={
+          stagedFiles.length > 0
+            ? "Add instructions for attached file(s)…"
+            : "How can I help you today? (Paste or upload files)"
+        }
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
@@ -3481,27 +3827,53 @@ function Composer({
           }
         }}
       />
+
       <div className="composer-row">
-        <button
-          type="button"
-          className="pill pill-interactive"
-          onClick={() => (providers.length > 0 ? setMenuOpen(!menuOpen) : onOpenSettings())}
-          aria-label="Select provider and model"
-        >
-          <SparklesIcon />
-          <span>{activeProvider ? `${activeProvider.name}: ${activeProvider.selectedModel}` : "Configure AI Provider"}</span>
-          {activeProvider?.reasoningEffort && activeProvider.reasoningEffort !== "none" && (
-            <span className="reasoning-effort-badge" title={`Reasoning Effort: ${activeProvider.reasoningEffort}`}>
-              <ZapIcon />
-              <span>{activeProvider.reasoningEffort.toUpperCase()}</span>
-            </span>
-          )}
-          {providers.length > 0 && (
-            <span className={`pill-caret ${menuOpen ? "open" : ""}`}>
-              <ChevronDownIcon />
-            </span>
-          )}
-        </button>
+        <div className="composer-controls-left">
+          <button
+            type="button"
+            className="composer-attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload image or files (+)"
+            aria-label="Upload files"
+            disabled={busy || uploading}
+          >
+            <PlusIcon />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                onAddFiles(Array.from(e.target.files));
+                e.target.value = "";
+              }
+            }}
+          />
+
+          <button
+            type="button"
+            className="pill pill-interactive"
+            onClick={() => (providers.length > 0 ? setMenuOpen(!menuOpen) : onOpenSettings())}
+            aria-label="Select provider and model"
+          >
+            <SparklesIcon />
+            <span>{activeProvider ? `${activeProvider.name}: ${activeProvider.selectedModel}` : "Configure AI Provider"}</span>
+            {activeProvider?.reasoningEffort && activeProvider.reasoningEffort !== "none" && (
+              <span className="reasoning-effort-badge" title={`Reasoning Effort: ${activeProvider.reasoningEffort}`}>
+                <ZapIcon />
+                <span>{activeProvider.reasoningEffort.toUpperCase()}</span>
+              </span>
+            )}
+            {providers.length > 0 && (
+              <span className={`pill-caret ${menuOpen ? "open" : ""}`}>
+                <ChevronDownIcon />
+              </span>
+            )}
+          </button>
+        </div>
 
         {menuOpen && (
           <>
@@ -3570,8 +3942,14 @@ function Composer({
           </>
         )}
 
-        <button type="button" className="send" onClick={onSubmit} disabled={busy || !draft.trim()} aria-label="Send">
-          <SendIcon />
+        <button
+          type="button"
+          className="send"
+          onClick={onSubmit}
+          disabled={busy || uploading || (!draft.trim() && stagedFiles.length === 0)}
+          aria-label="Send"
+        >
+          {uploading ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <SendIcon />}
         </button>
       </div>
     </div>
@@ -3924,9 +4302,40 @@ function Chat({
   }, [status, messages, onTriggerWorkspaceRefresh, hindsightConfig, agent]);
 
   const [draft, setDraft] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<StagedAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const busy = status === "submitted" || status === "streaming";
   const titled = useRef(false);
   const empty = messages.length === 0;
+
+  const handleAddFiles = (files: File[]) => {
+    const next: StagedAttachment[] = [];
+    for (const f of files) {
+      const isImg = f.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif)$/i.test(f.name);
+      const id = "att-" + Math.random().toString(36).slice(2, 9);
+      const previewUrl = isImg ? URL.createObjectURL(f) : undefined;
+      next.push({
+        id,
+        file: f,
+        name: f.name,
+        size: f.size,
+        type: f.type || (isImg ? "image/png" : "application/octet-stream"),
+        isImage: isImg,
+        previewUrl,
+      });
+    }
+    setStagedFiles((prev) => [...prev, ...next]);
+  };
+
+  const handleRemoveFile = (id: string) => {
+    setStagedFiles((prev) => {
+      const item = prev.find((x) => x.id === id);
+      if (item?.previewUrl) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+      return prev.filter((x) => x.id !== id);
+    });
+  };
 
   const activeErrorStr = connectionError
     ? connectionError.message || `WebSocket Connection Error (${connectionError.code || "closed"})`
@@ -3936,22 +4345,66 @@ function Chat({
 
   const hasError = !!activeErrorStr && dismissedError !== activeErrorStr;
 
-  const submit = () => {
+  const submit = async () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && stagedFiles.length === 0) || busy || uploading) return;
     if (!activeProvider || !activeProvider.endpoint || !activeProvider.selectedModel) {
       onOpenSettings();
       return;
     }
+
+    let finalPromptText = text;
+    const filesToUpload = [...stagedFiles];
+
+    if (filesToUpload.length > 0) {
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        for (const item of filesToUpload) {
+          formData.append("files", item.file, item.name);
+        }
+        const res = await fetch(`/api/workspace/upload?convoId=${encodeURIComponent(convoId)}`, {
+          method: "POST",
+          body: formData,
+        });
+        const data = (await res.json()) as any;
+        if (!data.ok) {
+          throw new Error(data.error || "Failed to upload files");
+        }
+        onTriggerWorkspaceRefresh?.();
+
+        const fileSummary = filesToUpload
+          .map((f) => `/${f.name.replace(/^\/+/, "")} (${f.type || "file"}, ${formatBytes(f.size)})`)
+          .join(", ");
+
+        const attachHeader = `[Attached Workspace File(s): ${fileSummary}]`;
+        if (text) {
+          finalPromptText = `${attachHeader}\n\n${text}`;
+        } else {
+          finalPromptText = `${attachHeader}\nPlease inspect and analyze the attached workspace file(s).`;
+        }
+      } catch (err: any) {
+        alert(`File upload failed: ${err.message || String(err)}`);
+        setUploading(false);
+        return;
+      } finally {
+        for (const item of filesToUpload) {
+          if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+        }
+        setStagedFiles([]);
+        setUploading(false);
+      }
+    }
+
     turnStartTimeRef.current = Date.now();
-    lastSentUserTextRef.current = text;
+    lastSentUserTextRef.current = finalPromptText;
     setDismissedError(null);
     clearError?.();
     if (!titled.current) {
       titled.current = true;
-      onFirstMessage(text);
+      onFirstMessage(text || (filesToUpload[0] ? `Upload ${filesToUpload[0].name}` : "Upload files"));
     }
-    sendMessage({ text });
+    sendMessage({ text: finalPromptText });
     setDraft("");
   };
 
@@ -3987,8 +4440,12 @@ function Chat({
             <Composer
               draft={draft}
               setDraft={setDraft}
+              stagedFiles={stagedFiles}
+              onAddFiles={handleAddFiles}
+              onRemoveFile={handleRemoveFile}
               onSubmit={submit}
               busy={busy}
+              uploading={uploading}
               activeProvider={activeProvider}
               providers={providers}
               onSelectProvider={onSelectProvider}
@@ -4022,7 +4479,7 @@ function Chat({
             {messages.map((m) => (
               <article key={m.id} className={m.role === "user" ? "from-user" : "from-agent"}>
                 {m.role === "user" ? (
-                  <div className="body">{textOf(m)}</div>
+                  <UserMessageBody text={textOf(m)} convoId={convoId} />
                 ) : (
                   (() => {
                     const { thoughtText, mainText, isThinking } = extractThoughtAndAnswer(m);
@@ -4081,8 +4538,12 @@ function Chat({
           <Composer
             draft={draft}
             setDraft={setDraft}
+            stagedFiles={stagedFiles}
+            onAddFiles={handleAddFiles}
+            onRemoveFile={handleRemoveFile}
             onSubmit={submit}
             busy={busy}
+            uploading={uploading}
             activeProvider={activeProvider}
             providers={providers}
             onSelectProvider={onSelectProvider}

@@ -502,6 +502,7 @@ export class Assistant extends Think<Env> {
       "",
       "System & Tool usage guidelines:",
       "- For notes, code artifacts, or working drafts created in this session: use Cloudflare workspace tools (prefer read/ls/write/edit over bash cat/ls/sed).",
+      "- Uploaded user files & images: Files or images uploaded/pasted by the user in chat are stored directly in your Cloudflare Computer workspace root (e.g. `/image.png`, `/data.csv`, `/app.py`). You have full access to inspect, read, analyze, edit, and modify them using your workspace tools (`read`, `write`, `edit`, `ls`). When the user asks you to update or modify an uploaded file, apply the changes directly to the workspace file using `edit` or `write` so the updated file is saved.",
       "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering."
     );
 
@@ -654,12 +655,151 @@ export class Assistant extends Think<Env> {
   }
 
   @callable()
-  async getWorkspaceFile(path: string): Promise<{ ok: boolean; content?: string; error?: string }> {
+  async getWorkspaceFile(path: string): Promise<{
+    ok: boolean;
+    content?: string;
+    isBinary?: boolean;
+    base64?: string;
+    mimeType?: string;
+    error?: string;
+  }> {
     try {
       const cleanPath = path.startsWith("/") ? path : `/${path}`;
+      const ext = cleanPath.split(".").pop()?.toLowerCase() || "";
+      const isImg = ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif"].includes(ext);
+      const isPdf = ext === "pdf";
+      const isBin = isImg || isPdf || ["zip", "tar", "gz", "wasm", "bin", "mp3", "mp4", "wav", "webm"].includes(ext);
+
+      let rawBytes: Uint8Array | null = null;
+      if (typeof (this.workspace as any).readFileBytes === "function") {
+        try {
+          rawBytes = await (this.workspace as any).readFileBytes(cleanPath);
+        } catch {
+          rawBytes = null;
+        }
+      }
+
+      if (!rawBytes && (this.workspace as any).fs?.readFile) {
+        try {
+          const stream = await (this.workspace as any).fs.readFile(cleanPath);
+          if (stream && typeof stream.getReader === "function") {
+            const reader = stream.getReader();
+            const chunks: Uint8Array[] = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                chunks.push(value);
+                totalLen += value.length;
+              }
+            }
+            rawBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) {
+              rawBytes.set(chunk, offset);
+              offset += chunk.length;
+            }
+          }
+        } catch {
+          rawBytes = null;
+        }
+      }
+
+      let mime = "application/octet-stream";
+      if (ext === "png") mime = "image/png";
+      else if (ext === "jpg" || ext === "jpeg") mime = "image/jpeg";
+      else if (ext === "gif") mime = "image/gif";
+      else if (ext === "webp") mime = "image/webp";
+      else if (ext === "svg") mime = "image/svg+xml";
+      else if (ext === "ico") mime = "image/x-icon";
+      else if (ext === "bmp") mime = "image/bmp";
+      else if (ext === "avif") mime = "image/avif";
+      else if (ext === "pdf") mime = "application/pdf";
+      else if (ext === "json") mime = "application/json";
+      else if (ext === "html" || ext === "htm") mime = "text/html";
+      else if (ext === "css") mime = "text/css";
+      else if (ext === "js" || ext === "mjs") mime = "application/javascript";
+      else if (ext === "ts" || ext === "tsx") mime = "text/plain";
+      else if (ext === "txt" || ext === "md" || ext === "py" || ext === "sh") mime = "text/plain";
+
+      if (rawBytes) {
+        if (isBin) {
+          let binary = "";
+          const len = rawBytes.length;
+          for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(rawBytes[i]);
+          }
+          const base64 = btoa(binary);
+          return { ok: true, isBinary: true, base64, mimeType: mime };
+        } else {
+          const content = new TextDecoder().decode(rawBytes);
+          return { ok: true, content, isBinary: false, mimeType: mime };
+        }
+      }
+
       const raw = await (this.workspace as any).readFile?.(cleanPath, { encoding: "utf8" });
       const content = typeof raw === "string" ? raw : raw instanceof Uint8Array ? new TextDecoder().decode(raw) : String(raw || "");
-      return { ok: true, content };
+      return { ok: true, content, isBinary: false, mimeType: mime };
+    } catch (err: any) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  @callable()
+  async writeWorkspaceFile(payload: {
+    path: string;
+    content: string; // utf-8 string or base64
+    encoding?: "utf8" | "base64";
+  }): Promise<{ ok: boolean; path: string; size?: number; error?: string }> {
+    try {
+      const cleanPath = payload.path.startsWith("/") ? payload.path : `/${payload.path}`;
+      const lastSlash = cleanPath.lastIndexOf("/");
+      if (lastSlash > 0) {
+        const dir = cleanPath.slice(0, lastSlash);
+        try {
+          await (this.workspace as any).fs?.mkdir?.(dir, { recursive: true });
+        } catch {
+          /* ignore mkdir error */
+        }
+      }
+
+      let bytes: Uint8Array;
+      if (payload.encoding === "base64") {
+        const binaryStr = atob(payload.content);
+        bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+      } else {
+        bytes = new TextEncoder().encode(payload.content);
+      }
+
+      if ((this.workspace as any).fs?.writeFile) {
+        await (this.workspace as any).fs.writeFile(cleanPath, bytes);
+      } else if ((this.workspace as any).writeFile) {
+        await (this.workspace as any).writeFile(
+          cleanPath,
+          payload.encoding === "base64" ? new TextDecoder().decode(bytes) : payload.content
+        );
+      }
+
+      return { ok: true, path: cleanPath, size: bytes.length };
+    } catch (err: any) {
+      return { ok: false, path: payload.path, error: err.message || String(err) };
+    }
+  }
+
+  @callable()
+  async deleteWorkspaceFile(payload: { path: string }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const cleanPath = payload.path.startsWith("/") ? payload.path : `/${payload.path}`;
+      if ((this.workspace as any).fs?.rm) {
+        await (this.workspace as any).fs.rm(cleanPath, { force: true });
+      } else if ((this.workspace as any).rm) {
+        await (this.workspace as any).rm(cleanPath, { force: true });
+      }
+      return { ok: true };
     } catch (err: any) {
       return { ok: false, error: err.message || String(err) };
     }

@@ -288,10 +288,13 @@ export default {
       }
     }
 
-    // Workspace File Explorer & Code Preview REST API (backed by Assistant DO SQLite VFS)
-    // GET /api/workspace/files?convoId=xyz          -> { ok: true, files: [...] }
-    // GET /api/workspace/file?convoId=xyz&path=abc  -> { ok: true, content: "..." }
-    // GET /api/workspace/archive?convoId=xyz       -> { ok: true, files: [...] }
+    // Workspace File Explorer, Upload & Preview REST API (backed by Assistant DO SQLite VFS)
+    // GET  /api/workspace/files?convoId=xyz          -> { ok: true, files: [...] }
+    // GET  /api/workspace/file?convoId=xyz&path=abc  -> { ok: true, content: "...", isBinary: bool, base64?: string, mimeType?: string }
+    // GET  /api/workspace/raw?convoId=xyz&path=abc   -> Raw binary/text Response with Content-Type
+    // POST /api/workspace/upload?convoId=xyz        -> { ok: true, files: [...] }
+    // POST /api/workspace/delete?convoId=xyz        -> { ok: true }
+    // GET  /api/workspace/archive?convoId=xyz        -> { ok: true, files: [...] }
     if (url.pathname.startsWith("/api/workspace")) {
       const convoId = url.searchParams.get("convoId");
       if (!convoId) {
@@ -312,6 +315,111 @@ export default {
         const filePath = url.searchParams.get("path") || "";
         try {
           const res = await stub.getWorkspaceFile(filePath);
+          return Response.json(res);
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === "/api/workspace/raw" && request.method === "GET") {
+        const filePath = url.searchParams.get("path") || "";
+        try {
+          const res = await stub.getWorkspaceFile(filePath);
+          if (!res.ok) {
+            return new Response(res.error || "File not found", { status: 404 });
+          }
+          const mime = res.mimeType || "application/octet-stream";
+          if (res.isBinary && res.base64) {
+            const binaryStr = atob(res.base64);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+            return new Response(bytes, {
+              headers: {
+                "content-type": mime,
+                "cache-control": "no-cache",
+              },
+            });
+          }
+          return new Response(res.content || "", {
+            headers: {
+              "content-type": mime,
+              "cache-control": "no-cache",
+            },
+          });
+        } catch (err: any) {
+          return new Response(err.message || String(err), { status: 500 });
+        }
+      }
+
+      if (url.pathname === "/api/workspace/upload" && request.method === "POST") {
+        try {
+          const contentType = request.headers.get("content-type") || "";
+          const uploadedResults: Array<{ name: string; path: string; size: number; type: string }> = [];
+
+          if (contentType.includes("multipart/form-data")) {
+            const formData = await request.formData();
+            for (const [key, value] of formData.entries()) {
+              if (value instanceof File) {
+                const arrayBuf = await value.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuf);
+                let binary = "";
+                for (let i = 0; i < bytes.length; i++) {
+                  binary += String.fromCharCode(bytes[i]);
+                }
+                const base64 = btoa(binary);
+                const filename = value.name || "uploaded_file";
+                const filePath = filename.startsWith("/") ? filename : `/${filename}`;
+                await stub.writeWorkspaceFile({
+                  path: filePath,
+                  content: base64,
+                  encoding: "base64",
+                });
+                uploadedResults.push({
+                  name: filename,
+                  path: filePath,
+                  size: bytes.length,
+                  type: value.type || "application/octet-stream",
+                });
+              }
+            }
+          } else {
+            const body = (await request.json()) as {
+              files?: Array<{ name: string; content: string; encoding?: "utf8" | "base64"; type?: string }>;
+              file?: { name: string; content: string; encoding?: "utf8" | "base64"; type?: string };
+            };
+            const list = body.files || (body.file ? [body.file] : []);
+            for (const item of list) {
+              const filename = item.name || "file.txt";
+              const filePath = filename.startsWith("/") ? filename : `/${filename}`;
+              const writeRes = await stub.writeWorkspaceFile({
+                path: filePath,
+                content: item.content,
+                encoding: item.encoding || "utf8",
+              });
+              uploadedResults.push({
+                name: filename,
+                path: filePath,
+                size: writeRes.size || item.content.length,
+                type: item.type || "text/plain",
+              });
+            }
+          }
+
+          return Response.json({ ok: true, files: uploadedResults });
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
+      }
+
+      if (url.pathname === "/api/workspace/delete" && request.method === "POST") {
+        try {
+          const body = (await request.json()) as { path?: string };
+          if (!body?.path) {
+            return Response.json({ ok: false, error: "Missing path parameter" }, { status: 400 });
+          }
+          const res = await stub.deleteWorkspaceFile({ path: body.path });
           return Response.json(res);
         } catch (err: any) {
           return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
