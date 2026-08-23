@@ -5910,19 +5910,16 @@ function Chat({
           const userText = textOf(lastUser);
           const asstText = textOf(lastAsst);
           if (userText && asstText) {
-            (agent as any)
-              .autoRetainTurn({
-                userMessage: userText,
-                assistantResponse: asstText,
-                mnemosyneConfig,
-              })
-              .catch((err: any) => console.warn("Mnemosyne auto-retain failed:", err));
+            cloudRememberMnemosyne({
+              content: `User: ${userText.slice(0, 300)}\nAssistant: ${asstText.slice(0, 300)}`,
+              importance: 0.6,
+            }).catch((err: any) => console.warn("Mnemosyne auto-retain failed:", err));
           }
         }
       }
     }
     prevStatusRef.current = status;
-  }, [status, messages, onTriggerWorkspaceRefresh, mnemosyneConfig, agent]);
+  }, [status, messages, onTriggerWorkspaceRefresh, mnemosyneConfig]);
 
   const [draft, setDraft] = useState("");
   const [stagedFiles, setStagedFiles] = useState<StagedAttachment[]>([]);
