@@ -7,8 +7,27 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { McpServerConfig, McpToolDef, McpAuthType, HindsightConfig } from "./mcp-types";
+import type {
+  MnemosyneConfig,
+  EpisodicMemoryItem,
+  TripleItem,
+  WorkingMemoryItem,
+  MnemosyneStats,
+  MnemosyneRecallResult,
+} from "./mnemosyne";
 
-export type { McpServerConfig, McpToolDef, McpAuthType, HindsightConfig };
+export type {
+  McpServerConfig,
+  McpToolDef,
+  McpAuthType,
+  HindsightConfig,
+  MnemosyneConfig,
+  EpisodicMemoryItem,
+  TripleItem,
+  WorkingMemoryItem,
+  MnemosyneStats,
+  MnemosyneRecallResult,
+};
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -393,6 +412,122 @@ async function cloudSaveHindsightConfig(config: HindsightConfig): Promise<Hindsi
   if (!data.ok) throw new Error("cloud save hindsight config !ok");
   return data.config;
 }
+
+/* ---------------- Mnemosyne Zero-Cloud Native Memory Client ---------------- */
+
+async function cloudGetMnemosyneConfig(): Promise<MnemosyneConfig> {
+  const res = await fetch("/api/mnemosyne/config");
+  if (!res.ok) throw new Error(`cloud get mnemosyne config ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; config: MnemosyneConfig };
+  if (!data.ok) throw new Error("cloud get mnemosyne config !ok");
+  return data.config;
+}
+
+async function cloudSaveMnemosyneConfig(config: MnemosyneConfig): Promise<MnemosyneConfig> {
+  const res = await fetch("/api/mnemosyne/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error(`cloud save mnemosyne config ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; config: MnemosyneConfig };
+  if (!data.ok) throw new Error("cloud save mnemosyne config !ok");
+  return data.config;
+}
+
+async function cloudGetMnemosyneStats(): Promise<MnemosyneStats> {
+  const res = await fetch("/api/mnemosyne/stats");
+  if (!res.ok) throw new Error(`cloud get mnemosyne stats ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; stats: MnemosyneStats };
+  if (!data.ok) throw new Error("cloud get mnemosyne stats !ok");
+  return data.stats;
+}
+
+async function cloudListMnemosyneMemories(): Promise<EpisodicMemoryItem[]> {
+  const res = await fetch("/api/mnemosyne/memories");
+  if (!res.ok) throw new Error(`cloud get mnemosyne memories ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; memories: EpisodicMemoryItem[] };
+  if (!data.ok) throw new Error("cloud get mnemosyne memories !ok");
+  return data.memories || [];
+}
+
+async function cloudListMnemosyneTriples(): Promise<TripleItem[]> {
+  const res = await fetch("/api/mnemosyne/triples");
+  if (!res.ok) throw new Error(`cloud get mnemosyne triples ${res.status}`);
+  const data = (await res.json()) as { ok: boolean; triples: TripleItem[] };
+  if (!data.ok) throw new Error("cloud get mnemosyne triples !ok");
+  return data.triples || [];
+}
+
+async function cloudRememberMnemosyne(payload: {
+  content: string;
+  importance?: number;
+  isWorkingMemory?: boolean;
+  ttlSeconds?: number;
+  triples?: Array<{ subject: string; predicate: string; object: string }>;
+}): Promise<{ ok: boolean; id: string }> {
+  const res = await fetch("/api/mnemosyne/remember", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to save memory");
+  return data;
+}
+
+async function cloudRecallMnemosyne(query: string, topK = 5): Promise<MnemosyneRecallResult> {
+  const res = await fetch("/api/mnemosyne/recall", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query, topK, includeTriples: true }),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to recall memories");
+  return data.result;
+}
+
+async function cloudDeleteMnemosyneMemory(id: string): Promise<void> {
+  const res = await fetch("/api/mnemosyne/memories", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "delete", id }),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to delete memory");
+}
+
+async function cloudDeleteMnemosyneTriple(id: string): Promise<void> {
+  const res = await fetch("/api/mnemosyne/triples", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "delete", id }),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to delete triple");
+}
+
+async function cloudClearMnemosyne(target?: "all" | "working" | "episodic" | "triples"): Promise<void> {
+  const res = await fetch("/api/mnemosyne/clear", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target: target || "all" }),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to clear memory");
+}
+
+async function cloudConsolidateMnemosyne(): Promise<number> {
+  const res = await fetch("/api/mnemosyne/consolidate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const data = (await res.json()) as any;
+  if (!res.ok || !data.ok) throw new Error(data.error || "Failed to consolidate memory");
+  return data.count || 0;
+}
+
 
 function newId(): string {
   return "c" + Math.random().toString(36).slice(2, 10);
@@ -2650,110 +2785,204 @@ function SystemPromptEditor({
   );
 }
 
-/* ---------------- Hindsight Memory Editor ---------------- */
+/* ---------------- Mnemosyne Zero-Cloud Memory Panel ---------------- */
 
-function HindsightSettingsEditor({
+function MnemosyneMemoryPanel({
   config,
-  onSave,
+  onSaveConfig,
 }: {
-  config: HindsightConfig;
-  onSave: (updated: HindsightConfig) => void;
+  config: MnemosyneConfig;
+  onSaveConfig: (updated: MnemosyneConfig) => void;
 }) {
-  const [enabled, setEnabled] = useState(config.enabled);
-  const [endpoint, setEndpoint] = useState(config.endpoint || "");
-  const [authType, setAuthType] = useState<McpAuthType>(config.authType || "none");
-  const [bearerToken, setBearerToken] = useState(config.bearerToken || "");
-  const [cfAccessClientId, setCfAccessClientId] = useState(config.cfAccessClientId || "");
-  const [cfAccessClientSecret, setCfAccessClientSecret] = useState(config.cfAccessClientSecret || "");
-  const [bankId, setBankId] = useState(config.bankId || "");
+  const [enabled, setEnabled] = useState(config.enabled ?? true);
   const [autoRecall, setAutoRecall] = useState(config.autoRecall ?? true);
   const [autoRetain, setAutoRetain] = useState(config.autoRetain ?? true);
   const [recallTopK, setRecallTopK] = useState(config.recallTopK || 5);
-  const [showToken, setShowToken] = useState(false);
-  const [showCfSecret, setShowCfSecret] = useState(false);
+  const [scope, setScope] = useState(config.scope || "global");
 
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    type: "idle" | "ok" | "err";
-    message: string;
-    tools?: McpToolDef[];
-    hasRecall?: boolean;
-    hasRetain?: boolean;
-  }>({ type: "idle", message: "" });
-
+  const [activeTab, setActiveTab] = useState<"memories" | "triples" | "test" | "add">("memories");
+  const [stats, setStats] = useState<MnemosyneStats | null>(null);
+  const [memories, setMemories] = useState<EpisodicMemoryItem[]>([]);
+  const [triples, setTriples] = useState<TripleItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
-  const handleTestConnection = async () => {
-    if (!endpoint.trim()) {
-      setTestResult({ type: "err", message: "Please enter an MCP Endpoint URL first." });
-      return;
-    }
-    setTesting(true);
-    setTestResult({ type: "idle", message: "" });
+  // New Memory form
+  const [newContent, setNewContent] = useState("");
+  const [newImportance, setNewImportance] = useState(0.8);
+  const [isWorkingMem, setIsWorkingMem] = useState(false);
+  const [ttlSec, setTtlSec] = useState("");
+
+  // New Triple form
+  const [newSubj, setNewSubj] = useState("");
+  const [newPred, setNewPred] = useState("");
+  const [newObj, setNewObj] = useState("");
+
+  // Test Recall state
+  const [testQuery, setTestQuery] = useState("");
+  const [testResults, setTestResults] = useState<MnemosyneRecallResult | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  const refreshData = async () => {
+    setLoading(true);
     try {
-      const res = await fetch("/api/hindsight/test", {
+      const [s, m, t] = await Promise.all([
+        cloudGetMnemosyneStats().catch(() => null),
+        cloudListMnemosyneMemories().catch(() => []),
+        cloudListMnemosyneTriples().catch(() => []),
+      ]);
+      if (s) setStats(s);
+      setMemories(m);
+      setTriples(t);
+    } catch (err: any) {
+      console.error("Failed to load Mnemosyne data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshData();
+  }, []);
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated: MnemosyneConfig = {
+      enabled,
+      autoRecall,
+      autoRetain,
+      recallTopK: Number(recallTopK) || 5,
+      scope: scope.trim() || "global",
+      updatedAt: Date.now(),
+    };
+    onSaveConfig(updated);
+    try {
+      await cloudSaveMnemosyneConfig(updated);
+      setStatusMsg({ type: "ok", text: "Mnemosyne configuration saved to Cloudflare DO SQLite!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: err.message || "Failed to save configuration" });
+    }
+  };
+
+  const handleAddMemory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newContent.trim()) return;
+    try {
+      await cloudRememberMnemosyne({
+        content: newContent.trim(),
+        importance: Number(newImportance),
+        isWorkingMemory: isWorkingMem,
+        ttlSeconds: ttlSec ? Number(ttlSec) : undefined,
+      });
+      setNewContent("");
+      setStatusMsg({ type: "ok", text: "Memory successfully remembered!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
+      setActiveTab("memories");
+    } catch (err: any) {
+      setStatusMsg({ type: "err", text: err.message || "Failed to add memory" });
+    }
+  };
+
+  const handleAddTriple = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubj.trim() || !newPred.trim() || !newObj.trim()) return;
+    try {
+      const res = await fetch("/api/mnemosyne/triples", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          endpoint: endpoint.trim(),
-          authType,
-          bearerToken: bearerToken.trim() || undefined,
-          bankId: bankId.trim() || undefined,
-          oauthTokens: config.oauthTokens,
+          subject: newSubj.trim(),
+          predicate: newPred.trim(),
+          object: newObj.trim(),
         }),
       });
       const data = (await res.json()) as any;
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      setTestResult({
-        type: "ok",
-        message: data.message || `Connected to Hindsight MCP! Discovered ${data.tools?.length || 0} tools.`,
-        tools: data.tools,
-        hasRecall: data.hasRecall,
-        hasRetain: data.hasRetain,
-      });
+      if (!data.ok) throw new Error(data.error);
+      setNewSubj("");
+      setNewPred("");
+      setNewObj("");
+      setStatusMsg({ type: "ok", text: "Knowledge graph triple added!" });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
     } catch (err: any) {
-      setTestResult({ type: "err", message: err.message || String(err) });
+      setStatusMsg({ type: "err", text: err.message || "Failed to add triple" });
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this memory?")) return;
+    try {
+      await cloudDeleteMnemosyneMemory(id);
+      refreshData();
+    } catch (err: any) {
+      alert("Failed to delete memory: " + err.message);
+    }
+  };
+
+  const handleDeleteTriple = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this triple?")) return;
+    try {
+      await cloudDeleteMnemosyneTriple(id);
+      refreshData();
+    } catch (err: any) {
+      alert("Failed to delete triple: " + err.message);
+    }
+  };
+
+  const handleRunRecallTest = async () => {
+    if (!testQuery.trim()) return;
+    setTesting(true);
+    try {
+      const res = await cloudRecallMnemosyne(testQuery.trim(), Number(recallTopK) || 5);
+      setTestResults(res);
+    } catch (err: any) {
+      alert("Recall test failed: " + err.message);
     } finally {
       setTesting(false);
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const updated: HindsightConfig = {
-      ...config,
-      enabled,
-      endpoint: endpoint.trim(),
-      authType,
-      bearerToken: bearerToken.trim() || undefined,
-      bankId: bankId.trim() || undefined,
-      autoRecall,
-      autoRetain,
-      recallTopK: Number(recallTopK) || 5,
-      cachedTools: testResult.tools || config.cachedTools,
-      updatedAt: Date.now(),
-    };
-    onSave(updated);
-    setStatusMsg({ type: "ok", text: "Hindsight memory settings saved successfully!" });
-    setTimeout(() => setStatusMsg(null), 3000);
+  const handleConsolidate = async () => {
+    try {
+      const count = await cloudConsolidateMnemosyne();
+      setStatusMsg({ type: "ok", text: `Consolidated ${count} working memory item(s) into episodic summaries.` });
+      setTimeout(() => setStatusMsg(null), 4000);
+      refreshData();
+    } catch (err: any) {
+      alert("Consolidation failed: " + err.message);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm("⚠️ Are you sure you want to clear ALL memories & knowledge graph triples? This cannot be undone.")) return;
+    try {
+      await cloudClearMnemosyne("all");
+      setStatusMsg({ type: "ok", text: "All Mnemosyne memories cleared." });
+      setTimeout(() => setStatusMsg(null), 3000);
+      refreshData();
+    } catch (err: any) {
+      alert("Clear failed: " + err.message);
+    }
   };
 
   return (
-    <form className="form-grid" onSubmit={handleSubmit} autoComplete="off">
+    <div className="mnemosyne-panel">
+      {/* Top Banner & Active Toggle */}
       <div className="modal-section" style={{ borderBottom: "none", paddingBottom: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div>
             <h3 className="modal-section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <BrainIcon />
-              <span>Hermes Hindsight Memory</span>
+              <span>Mnemosyne Zero-Cloud Memory</span>
+              <span className="badge badge-connected" style={{ fontSize: 11 }}>Cloudflare DO SQLite</span>
             </h3>
             <p className="modal-section-desc">
-              Long-term persistent semantic memory with pre-inference recall and post-turn background consolidation.
+              Universal BEAM memory layer (Working Memory + Episodic Memory with Hybrid Vector/FTS scoring + Temporal Knowledge Graph). Runs 100% serverless at the Cloudflare edge without external dependencies.
             </p>
           </div>
-          <label className="toggle-switch" title={enabled ? "Disable Hindsight Memory" : "Enable Hindsight Memory"}>
+          <label className="toggle-switch" title={enabled ? "Disable Mnemosyne Memory" : "Enable Mnemosyne Memory"}>
             <input
               type="checkbox"
               checked={enabled}
@@ -2764,174 +2993,394 @@ function HindsightSettingsEditor({
         </div>
       </div>
 
-      <div className="form-group">
-        <label className="form-label">
-          Hindsight MCP Endpoint URL
-          <span className="form-hint">Streamable HTTP / SSE MCP URL (e.g. Cloudflare MCP portal or Hindsight worker)</span>
-        </label>
-        <input
-          type="text"
-          className="text-input"
-          placeholder="https://mcps.itsuhiro.com/mcp?codemode=search_and_execute"
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          required={enabled}
-        />
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">
-          Authentication Method
-          <span className="form-hint">Authentication required by your Hindsight MCP endpoint</span>
-        </label>
-        <div className="segmented-nav" style={{ width: "100%", justifyContent: "space-between" }}>
-          <button
-            type="button"
-            className={`tab-btn ${authType === "none" ? "active" : ""}`}
-            style={{ flex: 1, justifyContent: "center" }}
-            onClick={() => setAuthType("none")}
-          >
-            No Auth
-          </button>
-          <button
-            type="button"
-            className={`tab-btn ${authType === "bearer" ? "active" : ""}`}
-            style={{ flex: 1, justifyContent: "center" }}
-            onClick={() => setAuthType("bearer")}
-          >
-            Bearer Token
-          </button>
-          <button
-            type="button"
-            className={`tab-btn ${authType === "oauth" ? "active" : ""}`}
-            style={{ flex: 1, justifyContent: "center" }}
-            onClick={() => setAuthType("oauth")}
-          >
-            OAuth 2.0
-          </button>
+      {/* Live Stats Bar */}
+      <div className="mnemosyne-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, margin: "8px 0 16px" }}>
+        <div className="mnemosyne-stat-card" style={{ padding: "10px 14px", background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 10 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>Episodic Memories</span>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)" }}>{stats?.totalEpisodic ?? memories.length}</span>
+        </div>
+        <div className="mnemosyne-stat-card" style={{ padding: "10px 14px", background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 10 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>Working Context</span>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)" }}>{stats?.totalWorking ?? 0}</span>
+        </div>
+        <div className="mnemosyne-stat-card" style={{ padding: "10px 14px", background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 10 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>KG Triples</span>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "var(--ink)" }}>{stats?.totalTriples ?? triples.length}</span>
+        </div>
+        <div className="mnemosyne-stat-card" style={{ padding: "10px 14px", background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 10 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>BEAM Scoring</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ok)" }}>50% Vec + 30% FTS</span>
         </div>
       </div>
 
-      {authType === "bearer" && (
-        <div className="form-group">
-          <label className="form-label">
-            Bearer Token / API Key
-            <span className="form-hint">Passed in Authorization: Bearer header</span>
-          </label>
-          <div className="input-row">
-            <input
-              type={showToken ? "text" : "password"}
-              className={showToken ? "text-input" : "text-input key-masked"}
-              placeholder="sk-... or secret token"
-              value={bearerToken}
-              onChange={(e) => setBearerToken(e.target.value)}
-            />
-            <button
-              type="button"
-              className="btn-icon"
-              onClick={() => setShowToken(!showToken)}
-              title={showToken ? "Hide token" : "Show token"}
-            >
-              {showToken ? <EyeOffIcon /> : <EyeIcon />}
-            </button>
+      {/* Sub-Navigation */}
+      <div className="segmented-nav" style={{ width: "100%", marginBottom: 16 }}>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === "memories" ? "active" : ""}`}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setActiveTab("memories")}
+        >
+          Memories ({memories.length})
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === "triples" ? "active" : ""}`}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setActiveTab("triples")}
+        >
+          Knowledge Graph ({triples.length})
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === "test" ? "active" : ""}`}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setActiveTab("test")}
+        >
+          Hybrid Recall Test
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === "add" ? "active" : ""}`}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setActiveTab("add")}
+        >
+          + Add Memory
+        </button>
+      </div>
+
+      {/* SUB-TAB 1: MEMORIES LIST */}
+      {activeTab === "memories" && (
+        <div className="mnemosyne-memories-container">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
+              Enduring long-term facts retrieved during chat turns.
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={handleConsolidate}
+                title="Consolidate working memory into long-term insights"
+              >
+                <RefreshIcon />
+                <span>Consolidate (Sleep)</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={refreshData}
+                disabled={loading}
+              >
+                {loading ? <span className="spinner" /> : <RefreshIcon />}
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
+
+          {memories.length === 0 ? (
+            <div className="empty-card" style={{ padding: "28px 16px", textAlign: "center", border: "1px dashed var(--line)", borderRadius: 12 }}>
+              <p style={{ margin: "0 0 10px", color: "var(--muted)", fontSize: 13.5 }}>
+                No memories recorded yet. The agent will proactively remember salient user preferences and facts, or you can add one manually.
+              </p>
+              <button type="button" className="btn-secondary btn-sm" onClick={() => setActiveTab("add")}>
+                + Add First Memory
+              </button>
+            </div>
+          ) : (
+            <div className="mnemosyne-cards-list" style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
+              {memories.map((m) => (
+                <div
+                  key={m.id}
+                  className="provider-card"
+                  style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13.5, color: "var(--ink)", lineHeight: 1.4, wordBreak: "break-word" }}>
+                      {m.content}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                      <span className="badge badge-connected" style={{ fontSize: 10 }}>
+                        {((m.importance || 0.7) * 100).toFixed(0)}% Salience
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                        Scope: {m.scope}
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                        Accessed: {m.accessCount || 0}x
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                        {new Date(m.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-text-del"
+                    onClick={() => handleDeleteMemory(m.id)}
+                    title="Delete memory"
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Memory Bank ID & Scope */}
-      <div className="form-group">
-        <label className="form-label">
-          Memory Bank ID / Scope (Optional)
-          <span className="form-hint">Leave blank to automatically isolate memories per conversation ID, or set a shared name (e.g. <code>global</code>)</span>
-        </label>
-        <input
-          type="text"
-          className="text-input"
-          placeholder="e.g. global (or leave blank for per-chat isolation)"
-          value={bankId}
-          onChange={(e) => setBankId(e.target.value)}
-        />
-      </div>
+      {/* SUB-TAB 2: KNOWLEDGE GRAPH TRIPLES */}
+      {activeTab === "triples" && (
+        <div className="mnemosyne-triples-container">
+          {/* Add Triple Inline */}
+          <form onSubmit={handleAddTriple} style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: "1 1 120px" }}
+              placeholder="Subject (e.g. User)"
+              value={newSubj}
+              onChange={(e) => setNewSubj(e.target.value)}
+              required
+            />
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: "1 1 120px" }}
+              placeholder="Predicate (e.g. prefers)"
+              value={newPred}
+              onChange={(e) => setNewPred(e.target.value)}
+              required
+            />
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: "1 1 140px" }}
+              placeholder="Object (e.g. Dark Mode)"
+              value={newObj}
+              onChange={(e) => setNewObj(e.target.value)}
+              required
+            />
+            <button type="submit" className="btn-secondary btn-sm" style={{ flexShrink: 0 }}>
+              + Add Triple
+            </button>
+          </form>
 
-      {/* Hermes Dual-Loop Controls */}
-      <div className="modal-section" style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
-        <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", margin: "0 0 10px" }}>
-          Hermes Dual-Loop Execution Controls
-        </h4>
-
-        <div className="protocol-select-box" style={{ marginBottom: 12 }}>
-          <label className="checkbox-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <span style={{ fontWeight: 600, fontSize: 13 }}>Pre-Inference Auto-Recall</span>
-              <p style={{ fontSize: 12, color: "var(--muted)", margin: "2px 0 0" }}>
-                Automatically retrieves relevant memories before the model begins reasoning and injects them into the system prompt.
+          {triples.length === 0 ? (
+            <div className="empty-card" style={{ padding: "24px 16px", textAlign: "center", border: "1px dashed var(--line)", borderRadius: 12 }}>
+              <p style={{ margin: "0", color: "var(--muted)", fontSize: 13 }}>
+                No Knowledge Graph triples recorded yet. Add structured entity links above.
               </p>
             </div>
+          ) : (
+            <div style={{ maxHeight: 300, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--line)", textAlign: "left", color: "var(--muted)" }}>
+                    <th style={{ padding: "6px 8px" }}>Subject</th>
+                    <th style={{ padding: "6px 8px" }}>Predicate</th>
+                    <th style={{ padding: "6px 8px" }}>Object</th>
+                    <th style={{ padding: "6px 8px", width: 40 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {triples.map((t) => (
+                    <tr key={t.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                      <td style={{ padding: "8px", fontWeight: 600, color: "var(--ink)" }}>{t.subject}</td>
+                      <td style={{ padding: "8px", color: "var(--accent)" }}>{t.predicate}</td>
+                      <td style={{ padding: "8px", color: "var(--ink)" }}>{t.object}</td>
+                      <td style={{ padding: "8px" }}>
+                        <button
+                          type="button"
+                          className="btn-text-del"
+                          onClick={() => handleDeleteTriple(t.id)}
+                          title="Delete triple"
+                        >
+                          <TrashIcon />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SUB-TAB 3: HYBRID RECALL TEST */}
+      {activeTab === "test" && (
+        <div className="mnemosyne-test-container">
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input
+              type="text"
+              className="text-input"
+              style={{ flex: 1 }}
+              placeholder="Enter search query (e.g. 'What are my UI preferences?')"
+              value={testQuery}
+              onChange={(e) => setTestQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleRunRecallTest()}
+            />
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleRunRecallTest}
+              disabled={testing || !testQuery.trim()}
+            >
+              {testing ? <span className="spinner" /> : <SparklesIcon />}
+              <span>Test BEAM Recall</span>
+            </button>
+          </div>
+
+          {testResults && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>
+                Retrieved Context Payload ({testResults.memories.length} Episodic, {testResults.triples.length} Triples):
+              </div>
+              <pre
+                style={{
+                  padding: 12,
+                  background: "var(--code-bg)",
+                  color: "var(--code-text)",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                  whiteSpace: "pre-wrap",
+                  maxHeight: 220,
+                  overflowY: "auto",
+                }}
+              >
+                {testResults.formattedContext || "No matching memories found for this query."}
+              </pre>
+
+              {testResults.memories.length > 0 && (
+                <div>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Hybrid Score Breakdown:</span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                    {testResults.memories.map((m) => (
+                      <div
+                        key={m.id}
+                        style={{
+                          padding: "8px 12px",
+                          background: "var(--panel-2)",
+                          border: "1px solid var(--line)",
+                          borderRadius: 8,
+                          fontSize: 12,
+                          display: "flex",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <span style={{ flex: 1 }}>{m.content}</span>
+                        <span className="badge badge-connected" style={{ fontSize: 10, marginLeft: 8 }}>
+                          BEAM Match: {((m.score || 0) * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SUB-TAB 4: ADD MEMORY FORM */}
+      {activeTab === "add" && (
+        <form onSubmit={handleAddMemory} className="form-grid" style={{ gap: 12 }}>
+          <div className="form-group">
+            <label className="form-label">
+              Memory Content / Fact
+              <span className="form-hint">Concise statement, user preference, or architectural decision</span>
+            </label>
+            <textarea
+              className="text-input"
+              rows={3}
+              style={{ resize: "vertical" }}
+              placeholder="e.g. User prefers Python and React for backend and frontend workflows."
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              required
+            />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-group">
+              <label className="form-label">
+                Salience / Importance: {((newImportance || 0.7) * 100).toFixed(0)}%
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.05"
+                value={newImportance}
+                onChange={(e) => setNewImportance(parseFloat(e.target.value))}
+                style={{ width: "100%", accentColor: "var(--accent)" }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">
+                Working Memory (Hot Context)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={isWorkingMem}
+                  onChange={(e) => setIsWorkingMem(e.target.checked)}
+                />
+                <span style={{ fontSize: 13 }}>Temporary short-term context</span>
+              </label>
+            </div>
+          </div>
+
+          <button type="submit" className="btn-primary" style={{ marginTop: 4 }}>
+            Commit Memory to Mnemosyne
+          </button>
+        </form>
+      )}
+
+      {/* Global Configuration Controls Footer */}
+      <form onSubmit={handleSaveSettings} style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+        <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", margin: "0 0 10px" }}>
+          Execution & Auto-Retention Settings
+        </h4>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
               checked={autoRecall}
               onChange={(e) => setAutoRecall(e.target.checked)}
             />
+            <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pre-Turn Auto-Recall</span>
           </label>
-        </div>
-
-        <div className="protocol-select-box" style={{ marginBottom: 12 }}>
-          <label className="checkbox-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <span style={{ fontWeight: 600, fontSize: 13 }}>Post-Turn Auto-Retain & Consolidation</span>
-              <p style={{ fontSize: 12, color: "var(--muted)", margin: "2px 0 0" }}>
-                Asynchronously commits conversation exchanges to Hindsight in the background after each answer (zero user latency).
-              </p>
-            </div>
+          <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
               checked={autoRetain}
               onChange={(e) => setAutoRetain(e.target.checked)}
             />
+            <span style={{ fontSize: 12.5, fontWeight: 500 }}>Post-Turn Auto-Retain</span>
           </label>
         </div>
-      </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <button type="button" className="btn-secondary btn-sm" onClick={handleClearAll} style={{ color: "var(--err)" }}>
+            Clear All Memories
+          </button>
+          <button type="submit" className="btn-primary">
+            Save Mnemosyne Settings
+          </button>
+        </div>
+      </form>
 
       {statusMsg && (
-        <div className={`banner-msg ${statusMsg.type}`}>
+        <div className={`banner-msg ${statusMsg.type}`} style={{ marginTop: 12 }}>
           {statusMsg.type === "ok" ? <CheckIcon /> : <XIcon />}
           <span>{statusMsg.text}</span>
         </div>
       )}
-
-      {/* Action Bar: Test Connection on Left, Save on Right (Horizontal Alignment) */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleTestConnection}
-            disabled={testing || !endpoint.trim()}
-            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-          >
-            {testing ? <span className="spinner" /> : <SparklesIcon />}
-            <span>{testing ? "Testing Handshake…" : "Test Connection & Probe Tools"}</span>
-          </button>
-
-          {testResult.type === "ok" && (
-            <span className="badge badge-connected" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <CheckIcon />
-              {testResult.message}
-            </span>
-          )}
-          {testResult.type === "err" && (
-            <span className="badge badge-auth" style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(220, 50, 50, 0.12)", color: "#e05555" }}>
-              <AlertTriangleIcon />
-              {testResult.message}
-            </span>
-          )}
-        </div>
-
-        <button type="submit" className="btn-primary">
-          Save Hindsight Settings
-        </button>
-      </div>
-    </form>
+    </div>
   );
 }
 
@@ -2948,8 +3397,8 @@ function SettingsModal({
   onSelectActiveProvider,
   mcpServers,
   onSaveMcpServers,
-  hindsightConfig,
-  onSaveHindsightConfig,
+  mnemosyneConfig,
+  onSaveMnemosyneConfig,
   customSystemPrompt,
   systemPromptMode,
   onSaveSystemPrompt,
@@ -2965,8 +3414,8 @@ function SettingsModal({
   onSelectActiveProvider: (id: string) => void;
   mcpServers: McpServerConfig[];
   onSaveMcpServers: (servers: McpServerConfig[]) => void;
-  hindsightConfig: HindsightConfig;
-  onSaveHindsightConfig: (config: HindsightConfig) => void;
+  mnemosyneConfig: MnemosyneConfig;
+  onSaveMnemosyneConfig: (config: MnemosyneConfig) => void;
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
   onSaveSystemPrompt: (prompt: string, mode: "append" | "override") => void;
@@ -3141,7 +3590,7 @@ function SettingsModal({
             >
               <BrainIcon />
               <span>Memory</span>
-              {hindsightConfig?.enabled && <span className="tab-count">Active</span>}
+              {mnemosyneConfig?.enabled && <span className="tab-count">Active</span>}
             </button>
             <button
               type="button"
@@ -3376,11 +3825,11 @@ function SettingsModal({
             </>
           )}
 
-          {/* TAB: HINDSIGHT MEMORY */}
+          {/* TAB: MNEMOSYNE ZERO-CLOUD MEMORY */}
           {activeTab === "memory" && (
-            <HindsightSettingsEditor
-              config={hindsightConfig}
-              onSave={onSaveHindsightConfig}
+            <MnemosyneMemoryPanel
+              config={mnemosyneConfig}
+              onSaveConfig={onSaveMnemosyneConfig}
             />
           )}
 
@@ -4209,7 +4658,7 @@ function Chat({
   onOpenSettings,
   onUpdateProviderReasoningEffort,
   mcpServers,
-  hindsightConfig,
+  mnemosyneConfig,
   customSystemPrompt,
   systemPromptMode,
   onTriggerWorkspaceRefresh,
@@ -4222,7 +4671,7 @@ function Chat({
   onOpenSettings: () => void;
   onUpdateProviderReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
   mcpServers: McpServerConfig[];
-  hindsightConfig: HindsightConfig;
+  mnemosyneConfig: MnemosyneConfig;
   customSystemPrompt: string;
   systemPromptMode: "append" | "override";
   onTriggerWorkspaceRefresh?: () => void;
@@ -4236,7 +4685,7 @@ function Chat({
     body: () => ({
       providerId: activeProvider?.id,
       mcpServers,
-      hindsightConfig,
+      mnemosyneConfig,
       userMessage: lastSentUserTextRef.current,
       customSystemPrompt,
       promptMode: systemPromptMode,
@@ -4277,8 +4726,8 @@ function Chat({
       }
       onTriggerWorkspaceRefresh?.();
 
-      // Hermes Post-Turn Auto-Retain: Asynchronously retain turn in background
-      if (hindsightConfig?.enabled && hindsightConfig.autoRetain) {
+      // Mnemosyne Post-Turn Auto-Retain: Asynchronously retain turn in background
+      if (mnemosyneConfig?.enabled && mnemosyneConfig.autoRetain) {
         const userMsgs = messages.filter((m) => m.role === "user");
         const asstMsgs = messages.filter((m) => m.role === "assistant");
         const lastUser = userMsgs[userMsgs.length - 1];
@@ -4291,15 +4740,15 @@ function Chat({
               .autoRetainTurn({
                 userMessage: userText,
                 assistantResponse: asstText,
-                hindsightConfig,
+                mnemosyneConfig,
               })
-              .catch((err: any) => console.warn("Hindsight auto-retain failed:", err));
+              .catch((err: any) => console.warn("Mnemosyne auto-retain failed:", err));
           }
         }
       }
     }
     prevStatusRef.current = status;
-  }, [status, messages, onTriggerWorkspaceRefresh, hindsightConfig, agent]);
+  }, [status, messages, onTriggerWorkspaceRefresh, mnemosyneConfig, agent]);
 
   const [draft, setDraft] = useState("");
   const [stagedFiles, setStagedFiles] = useState<StagedAttachment[]>([]);
@@ -4597,14 +5046,13 @@ function AppInner() {
   // Settings Modal State
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Hindsight Memory State (Cloud DO source of truth)
-  const [hindsightConfig, setHindsightConfig] = useState<HindsightConfig>({
-    enabled: false,
-    endpoint: "",
-    authType: "none",
+  // Mnemosyne Zero-Cloud Memory State (Cloud DO SQLite source of truth)
+  const [mnemosyneConfig, setMnemosyneConfig] = useState<MnemosyneConfig>({
+    enabled: true,
     autoRecall: true,
     autoRetain: true,
     recallTopK: 5,
+    scope: "global",
   });
 
   // Right Workspace Drawer State
@@ -4669,10 +5117,10 @@ function AppInner() {
       })
       .catch(() => {});
 
-    cloudGetHindsightConfig()
+    cloudGetMnemosyneConfig()
       .then((cfg) => {
         if (!cancelled && cfg) {
-          setHindsightConfig(cfg);
+          setMnemosyneConfig(cfg);
         }
       })
       .catch(() => {});
@@ -4746,13 +5194,13 @@ function AppInner() {
     });
   };
 
-  const handleSaveHindsightConfig = async (nextConfig: HindsightConfig) => {
-    setHindsightConfig(nextConfig);
+  const handleSaveMnemosyneConfig = async (nextConfig: MnemosyneConfig) => {
+    setMnemosyneConfig(nextConfig);
     try {
-      const saved = await cloudSaveHindsightConfig(nextConfig);
-      setHindsightConfig(saved);
+      const saved = await cloudSaveMnemosyneConfig(nextConfig);
+      setMnemosyneConfig(saved);
     } catch (err) {
-      console.error("Failed to sync Hindsight config with cloud:", err);
+      console.error("Failed to sync Mnemosyne config with cloud:", err);
     }
   };
 
@@ -5006,7 +5454,7 @@ function AppInner() {
           onOpenSettings={() => setSettingsOpen(true)}
           onUpdateProviderReasoningEffort={handleUpdateProviderReasoningEffort}
           mcpServers={mcpServers}
-          hindsightConfig={hindsightConfig}
+          mnemosyneConfig={mnemosyneConfig}
           customSystemPrompt={customSystemPrompt}
           systemPromptMode={systemPromptMode}
           onTriggerWorkspaceRefresh={() => setWorkspaceRefreshToken((n) => n + 1)}
@@ -5033,8 +5481,8 @@ function AppInner() {
         onSelectActiveProvider={handleSelectActiveProvider}
         mcpServers={mcpServers}
         onSaveMcpServers={handleSaveMcpServers}
-        hindsightConfig={hindsightConfig}
-        onSaveHindsightConfig={handleSaveHindsightConfig}
+        mnemosyneConfig={mnemosyneConfig}
+        onSaveMnemosyneConfig={handleSaveMnemosyneConfig}
         customSystemPrompt={customSystemPrompt}
         systemPromptMode={systemPromptMode}
         onSaveSystemPrompt={handleSaveSystemPrompt}

@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { mcpCallTool, resolveHindsightEndpoint } from "./mcp-client";
 import type { McpServerConfig, HindsightConfig } from "./mcp-types";
+import type { MnemosyneConfig } from "./mnemosyne";
 
 function cleanBaseUrl(raw: string): string {
   let url = raw.trim();
@@ -240,20 +241,16 @@ export class Assistant extends Think<Env> {
     this.currentCustomPrompt = customPrompt?.trim() || undefined;
     this.currentPromptMode = promptMode || "append";
 
-    let hindsightConfig = ctx.body?.hindsightConfig as HindsightConfig | undefined;
-    if ((!hindsightConfig || !hindsightConfig.enabled) && (this.env as any).ConvoIndex) {
+    let mnemosyneConfig: MnemosyneConfig | undefined;
+    if ((this.env as any).ConvoIndex) {
       try {
         const stub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
-        const persisted = await stub.getHindsightConfig();
-        if (persisted?.enabled && persisted.endpoint) {
-          hindsightConfig = persisted;
-        }
+        mnemosyneConfig = await stub.mnemosyneGetConfig();
       } catch (err) {
-        console.warn("Failed to load HindsightConfig from ConvoIndex DO:", err);
+        console.warn("Failed to load MnemosyneConfig from ConvoIndex DO:", err);
       }
     }
 
-    this.currentHindsightConfig = hindsightConfig?.enabled && hindsightConfig.endpoint ? hindsightConfig : undefined;
     this.currentMemoryContext = undefined;
 
     // Extract last user message from body or conversation history
@@ -270,40 +267,23 @@ export class Assistant extends Think<Env> {
       }
     }
 
-    // 1. Auto-Recall: Hermes-style pre-inference memory injection
-    if (this.currentHindsightConfig?.autoRecall && userMessage?.trim()) {
+    // 1. Mnemosyne Auto-Recall: Pre-inference memory injection (Working Memory + Episodic + Knowledge Graph)
+    if (mnemosyneConfig?.enabled && mnemosyneConfig?.autoRecall && userMessage?.trim() && (this.env as any).ConvoIndex) {
       try {
-        const bankId = this.currentHindsightConfig.bankId || this.name;
-        const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
-        const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
+        const stub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
+        const recallRes = await stub.mnemosyneRecall({
+          query: userMessage.trim(),
+          topK: mnemosyneConfig.recallTopK || 5,
+          sessionId: this.name,
+          scope: mnemosyneConfig.scope || "global",
+          includeTriples: true,
+        });
 
-        const recallRes = await mcpCallTool(
-          hConfig,
-          "hindsight_recall",
-          {
-            query: userMessage.trim(),
-            bank_id: bankId,
-            limit: this.currentHindsightConfig.recallTopK || 5,
-          }
-        );
-
-        if (recallRes.ok && recallRes.text && recallRes.text.trim()) {
-          this.currentMemoryContext = recallRes.text.trim();
-        } else {
-          const fallbackRes = await mcpCallTool(
-            hConfig,
-            "recall",
-            {
-              query: userMessage.trim(),
-              bank_id: bankId,
-            }
-          );
-          if (fallbackRes.ok && fallbackRes.text && fallbackRes.text.trim()) {
-            this.currentMemoryContext = fallbackRes.text.trim();
-          }
+        if (recallRes && recallRes.formattedContext) {
+          this.currentMemoryContext = recallRes.formattedContext;
         }
       } catch (err) {
-        console.warn("Hindsight auto-recall failed:", err);
+        console.warn("Mnemosyne auto-recall failed:", err);
       }
     }
 
@@ -376,88 +356,98 @@ export class Assistant extends Think<Env> {
       }
     }
 
-    // Register Hermes-style explicit Hindsight Memory tools
-    if (this.currentHindsightConfig) {
-      const bankId = this.currentHindsightConfig.bankId || this.name;
-      const resolvedEndpoint = resolveHindsightEndpoint(this.currentHindsightConfig.endpoint, bankId);
-      const hConfig = { ...this.currentHindsightConfig, endpoint: resolvedEndpoint };
+    // Register Mnemosyne Zero-Cloud Native Memory Tools
+    if ((this.env as any).ConvoIndex && (mnemosyneConfig?.enabled ?? true)) {
+      const convoStub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
+
+      const rememberTool = tool({
+        description: "Store a permanent memory, user preference, architectural decision, constraint, or fact into Mnemosyne Zero-Cloud memory. Call this proactively whenever the user shares enduring information.",
+        inputSchema: z.object({
+          content: z.string().describe("The concise fact, decision, or preference to remember"),
+          importance: z.number().min(0.1).max(1.0).optional().describe("Salience weight from 0.1 to 1.0 (default 0.7)"),
+          isWorkingMemory: z.boolean().optional().describe("Set true for hot temporary context with TTL"),
+          ttlSeconds: z.number().optional().describe("Optional time-to-live in seconds"),
+        }),
+        execute: async (args) => {
+          const res = await convoStub.mnemosyneRemember({
+            content: args.content,
+            importance: args.importance ?? 0.7,
+            isWorkingMemory: args.isWorkingMemory,
+            ttlSeconds: args.ttlSeconds,
+            sessionId: this.name,
+            source: "agent_tool",
+          });
+          return res.ok ? `Memory retained successfully in Mnemosyne (ID: ${res.id})` : { error: "Failed to remember" };
+        },
+      });
 
       const recallTool = tool({
-        description: "Search and recall long-term memories, user preferences, past facts, and project decisions from the persistent Hindsight memory bank. Call this tool whenever you need historical context.",
+        description: "Search long-term episodic memory, working memory, and knowledge graph triples using Mnemosyne's BEAM hybrid scoring. Call this whenever you need past knowledge or user context.",
         inputSchema: z.object({
-          query: z.string().describe("The memory search query or concept to recall"),
-          bank_id: z.string().optional().describe("Optional memory bank ID (defaults to current session)"),
+          query: z.string().describe("Search query or concept to recall"),
+          top_k: z.number().optional().describe("Maximum number of memories to return (default 5)"),
         }),
         execute: async (args) => {
-          const res = await mcpCallTool(hConfig, "hindsight_recall", {
-            bank_id: args.bank_id || bankId,
+          const res = await convoStub.mnemosyneRecall({
             query: args.query,
+            topK: args.top_k || 5,
+            sessionId: this.name,
+            includeTriples: true,
           });
-          if (!res.ok) {
-            const fallback = await mcpCallTool(hConfig, "recall", {
-              bank_id: args.bank_id || bankId,
-              query: args.query,
-            });
-            return fallback.ok ? fallback.text || "No memories found" : { error: fallback.error || res.error };
-          }
-          return res.text || "No memories found";
+          return res.formattedContext || "No relevant memories found in Mnemosyne.";
         },
       });
 
-      const retainTool = tool({
-        description: "Retain, save, or commit a salient fact, preference, or decision into the persistent Hindsight memory bank.",
+      const queryTriplesTool = tool({
+        description: "Query structured entity relationships from the temporal knowledge graph (subject, predicate, object).",
         inputSchema: z.object({
-          content: z.string().describe("The concise fact, decision, or user preference to retain"),
-          bank_id: z.string().optional().describe("Optional memory bank ID (defaults to current session)"),
+          subject: z.string().optional().describe("Filter by subject entity name"),
+          predicate: z.string().optional().describe("Filter by relationship predicate"),
+          object: z.string().optional().describe("Filter by object value or entity"),
         }),
         execute: async (args) => {
-          const res = await mcpCallTool(hConfig, "hindsight_retain", {
-            bank_id: args.bank_id || bankId,
-            content: args.content,
-            timestamp: Date.now(),
+          const triples = await convoStub.mnemosyneQueryTriples({
+            subject: args.subject,
+            predicate: args.predicate,
+            object: args.object,
           });
-          if (!res.ok) {
-            const fallback = await mcpCallTool(hConfig, "retain", {
-              bank_id: args.bank_id || bankId,
-              content: args.content,
-              timestamp: Date.now(),
-            });
-            return fallback.ok ? fallback.text || "Memory retained" : { error: fallback.error || res.error };
-          }
-          return res.text || "Memory retained successfully";
+          if (!triples || triples.length === 0) return "No matching knowledge graph triples found.";
+          return triples
+            .map((t: any) => `(${t.subject}, ${t.predicate}, ${t.object})${t.validUntil ? ` [Valid until: ${t.validUntil}]` : ""}`)
+            .join("\n");
         },
       });
 
-      const reflectTool = tool({
-        description: "Reflect and consolidate memories on a specific topic or synthesize insights across memory graphs.",
+      const addTripleTool = tool({
+        description: "Add a structured entity relationship (Subject, Predicate, Object) into the temporal knowledge graph.",
         inputSchema: z.object({
-          topic: z.string().optional().describe("Topic or query to reflect upon"),
-          bank_id: z.string().optional().describe("Optional memory bank ID"),
+          subject: z.string().describe("Subject entity (e.g. 'User', 'Project', 'API')"),
+          predicate: z.string().describe("Predicate relationship (e.g. 'prefers', 'uses', 'assigned_to')"),
+          object: z.string().describe("Target object or attribute (e.g. 'Dark Mode', 'Cloudflare Workers')"),
+          valid_from: z.string().optional().describe("Optional valid from date"),
+          valid_until: z.string().optional().describe("Optional valid until date"),
         }),
         execute: async (args) => {
-          const res = await mcpCallTool(hConfig, "hindsight_reflect", {
-            bank_id: args.bank_id || bankId,
-            topic: args.topic,
+          const res = await convoStub.mnemosyneAddTriple({
+            subject: args.subject,
+            predicate: args.predicate,
+            object: args.object,
+            validFrom: args.valid_from,
+            validUntil: args.valid_until,
+            source: "agent_tool",
           });
-          if (!res.ok) {
-            const fallback = await mcpCallTool(hConfig, "reflect", {
-              bank_id: args.bank_id || bankId,
-              topic: args.topic,
-            });
-            return fallback.ok ? fallback.text || "Reflection complete" : { error: fallback.error || res.error };
-          }
-          return res.text || "Reflection complete";
+          return res.ok ? "Knowledge graph triple added successfully" : { error: "Failed to add triple" };
         },
       });
 
-      dynamicTools["hindsight_recall"] = recallTool;
-      dynamicTools["hindsight_retain"] = retainTool;
-      dynamicTools["hindsight_reflect"] = reflectTool;
+      dynamicTools["mnemosyne_remember"] = rememberTool;
+      dynamicTools["mnemosyne_recall"] = recallTool;
+      dynamicTools["mnemosyne_triples_query"] = queryTriplesTool;
+      dynamicTools["mnemosyne_triples_add"] = addTripleTool;
 
-      // Provide short aliases for direct tool selection
+      // Provide short aliases
+      if (!dynamicTools["remember"]) dynamicTools["remember"] = rememberTool;
       if (!dynamicTools["recall"]) dynamicTools["recall"] = recallTool;
-      if (!dynamicTools["retain"]) dynamicTools["retain"] = retainTool;
-      if (!dynamicTools["reflect"]) dynamicTools["reflect"] = reflectTool;
     }
 
     const turnParams = custom
@@ -480,41 +470,26 @@ export class Assistant extends Think<Env> {
       ...(model ? { model } : {}),
       tools: allTools,
       ...turnParams,
+      system: this.getSystemPrompt(),
     };
   }
 
-  override getSystemPrompt(): string {
+  /* ---------------- System Prompt ---------------- */
+
+  getSystemPrompt(): string {
     const promptParts = [
-      "You are Aki's Cloudflare edge agent.",
-      "Reply in the user's language (Chinese if they write Chinese).",
-      "You have access to these core systems and built-in capabilities:",
-      "1) Cloudflare Computer workspace — durable session files in this Durable Object (read, write, edit, ls).",
-      "2) Parallel Web Search MCP — real-time live web search and URL content extraction.",
-    ];
-
-    if (this.currentHindsightConfig) {
-      promptParts.push(
-        "3) Hermes Hindsight Long-term Memory — persistent cross-session episodic & semantic memory bank."
-      );
-    }
-
-    promptParts.push(
+      "You are cf-think-agent, a fast, proactive, intelligent autonomous agent running on Cloudflare Workers and Durable Objects.",
+      "You have access to persistent workspace file tools, real-time web search, and Mnemosyne Zero-Cloud AI memory.",
       "",
       "System & Tool usage guidelines:",
       "- For notes, code artifacts, or working drafts created in this session: use Cloudflare workspace tools (prefer read/ls/write/edit over bash cat/ls/sed).",
       "- Uploaded user files & images: Files or images uploaded/pasted by the user in chat are stored directly in your Cloudflare Computer workspace root (e.g. `/image.png`, `/data.csv`, `/app.py`). You have full access to inspect, read, analyze, edit, and modify them using your workspace tools (`read`, `write`, `edit`, `ls`). When the user asks you to update or modify an uploaded file, apply the changes directly to the workspace file using `edit` or `write` so the updated file is saved.",
-      "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering."
-    );
-
-    if (this.currentHindsightConfig) {
-      promptParts.push(
-        "- Long-term Memory: Relevant memories are automatically retrieved into <hindsight_memory_context>. Use them seamlessly to maintain continuity and respect user preferences without asking for already-known details.",
-        "- Proactive Retention: When the user shares enduring personal preferences, project architecture decisions, constraints, or requests you to remember something, proactively invoke `hindsight_retain`.",
-        "- Memory Search: Use `hindsight_recall` to explore past knowledge or `hindsight_reflect` to synthesize insights across memory graphs."
-      );
-    }
-
-    promptParts.push("- Keep replies concise and helpful.");
+      "- If asked about unfamiliar topics, recent events, breaking news, new technologies/APIs, facts outside your training cutoff, or anything you are not 100% certain about, you MUST proactively use the Parallel MCP search tools to search the web before answering.",
+      "- Mnemosyne Zero-Cloud Memory: Long-term memories, user preferences, and knowledge graph triples are automatically retrieved into <mnemosyne_memory_context>. Use them seamlessly to maintain continuity across all conversations without asking the user for already-known preferences.",
+      "- Proactive Retention: When the user shares enduring personal preferences, project architecture decisions, constraints, or requests you to remember something, proactively invoke `mnemosyne_remember` or `mnemosyne_triples_add`.",
+      "- Memory Search: Use `mnemosyne_recall` or `mnemosyne_triples_query` whenever you need historical context or user knowledge.",
+      "- Keep replies concise, structured, and helpful."
+    ];
 
     const defaultPrompt = promptParts.join("\n");
     let prompt = defaultPrompt;
@@ -527,7 +502,7 @@ export class Assistant extends Think<Env> {
     }
 
     if (this.currentMemoryContext) {
-      prompt += `\n\n<hindsight_memory_context>\n[Active Hindsight Long-term Memories]\n${this.currentMemoryContext}\n</hindsight_memory_context>`;
+      prompt += `\n\n<mnemosyne_memory_context>\n[Mnemosyne Persistent Memories & Knowledge Graph]\n${this.currentMemoryContext}\n</mnemosyne_memory_context>`;
     }
 
     return prompt;
@@ -537,34 +512,28 @@ export class Assistant extends Think<Env> {
   async autoRetainTurn(payload: {
     userMessage: string;
     assistantResponse: string;
-    hindsightConfig?: HindsightConfig;
+    mnemosyneConfig?: MnemosyneConfig;
   }): Promise<{ ok: boolean; message?: string }> {
-    const config = payload.hindsightConfig || this.currentHindsightConfig;
-    if (!config?.enabled || !config?.endpoint || !config?.autoRetain) {
-      return { ok: true, message: "Auto-retain not enabled" };
+    if ((this.env as any).ConvoIndex) {
+      try {
+        const stub = (this.env as any).ConvoIndex.get((this.env as any).ConvoIndex.idFromName("convo-index"));
+        const cfg = payload.mnemosyneConfig || (await stub.mnemosyneGetConfig());
+        if (cfg?.enabled && cfg?.autoRetain) {
+          const userSummary = payload.userMessage.slice(0, 300);
+          const asstSummary = payload.assistantResponse.slice(0, 300);
+          await stub.mnemosyneRemember({
+            content: `User: ${userSummary}\nAssistant: ${asstSummary}`,
+            importance: 0.6,
+            source: "auto_retain",
+            sessionId: this.name,
+          });
+          return { ok: true, message: "Mnemosyne turn retained" };
+        }
+      } catch (err: any) {
+        console.warn("Mnemosyne autoRetainTurn failed:", err);
+      }
     }
-    const bankId = config.bankId || this.name;
-    const resolvedEndpoint = resolveHindsightEndpoint(config.endpoint, bankId);
-    const hConfig = { ...config, endpoint: resolvedEndpoint };
-    const content = `User: ${payload.userMessage}\nAssistant: ${payload.assistantResponse}`;
-
-    let res = await mcpCallTool(hConfig, "hindsight_retain", {
-      bank_id: bankId,
-      content,
-      user: payload.userMessage,
-      assistant: payload.assistantResponse,
-      timestamp: Date.now(),
-    });
-    if (!res.ok) {
-      res = await mcpCallTool(hConfig, "retain", {
-        bank_id: bankId,
-        content,
-        user: payload.userMessage,
-        assistant: payload.assistantResponse,
-        timestamp: Date.now(),
-      });
-    }
-    return { ok: res.ok, message: res.text || res.error };
+    return { ok: true };
   }
 
   override getTools(): ToolSet {

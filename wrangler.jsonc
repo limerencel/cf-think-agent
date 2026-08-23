@@ -23,6 +23,9 @@
     "AIG_BASE_URL": "https://gateway.ai.cloudflare.com/v1/9a72e3f803ed0c6475d56b96513b7c5c/hermes-aig/custom-opencode/zen/go/v1",
     "MODEL_ID": "deepseek-v4-flash"
   },
+  "ai": {
+    "binding": "AI"
+  },
   "observability": {
     "enabled": true,
     "traces": { "enabled": true }

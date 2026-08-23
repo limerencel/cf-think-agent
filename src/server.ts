@@ -790,6 +790,128 @@ export default {
       }
     }
 
+    // Mnemosyne Zero-Cloud Native Memory REST API (backed by ConvoIndex DO SQLite)
+    if (url.pathname.startsWith("/api/mnemosyne")) {
+      const stub = env.ConvoIndex.get(env.ConvoIndex.idFromName(CONVO_INDEX));
+
+      if (url.pathname === "/api/mnemosyne/config") {
+        if (request.method === "GET") {
+          const config = await stub.mnemosyneGetConfig();
+          return Response.json({ ok: true, config });
+        }
+        if (request.method === "POST") {
+          let body: any = {};
+          try {
+            body = await request.json();
+          } catch {
+            return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+          }
+          const saved = await stub.mnemosyneSaveConfig(body);
+          return Response.json({ ok: true, config: saved });
+        }
+        return Response.json({ ok: false, error: "method not allowed" }, { status: 405 });
+      }
+
+      if (url.pathname === "/api/mnemosyne/stats" && request.method === "GET") {
+        const stats = await stub.mnemosyneGetStats();
+        return Response.json({ ok: true, stats });
+      }
+
+      if (url.pathname === "/api/mnemosyne/recall" && request.method === "POST") {
+        let body: any = {};
+        try {
+          body = await request.json();
+        } catch {
+          return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+        }
+        const result = await stub.mnemosyneRecall(body);
+        return Response.json({ ok: true, result });
+      }
+
+      if (url.pathname === "/api/mnemosyne/remember" && request.method === "POST") {
+        let body: any = {};
+        try {
+          body = await request.json();
+        } catch {
+          return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+        }
+        try {
+          const res = await stub.mnemosyneRemember(body);
+          return Response.json(res);
+        } catch (err: any) {
+          return Response.json({ ok: false, error: err.message || String(err) }, { status: 400 });
+        }
+      }
+
+      if (url.pathname === "/api/mnemosyne/memories") {
+        if (request.method === "GET") {
+          const scope = url.searchParams.get("scope") || undefined;
+          const limit = Number(url.searchParams.get("limit") || "50");
+          const offset = Number(url.searchParams.get("offset") || "0");
+          const memories = await stub.mnemosyneListMemories({ scope, limit, offset });
+          return Response.json({ ok: true, memories });
+        }
+        if (request.method === "POST") {
+          let body: any = {};
+          try {
+            body = await request.json();
+          } catch {
+            return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+          }
+          if (body.action === "delete" && body.id) {
+            const res = await stub.mnemosyneDeleteMemory(body.id);
+            return Response.json(res);
+          }
+          return Response.json({ ok: false, error: "invalid action" }, { status: 400 });
+        }
+      }
+
+      if (url.pathname === "/api/mnemosyne/triples") {
+        if (request.method === "GET") {
+          const limit = Number(url.searchParams.get("limit") || "50");
+          const offset = Number(url.searchParams.get("offset") || "0");
+          const triples = await stub.mnemosyneListTriples({ limit, offset });
+          return Response.json({ ok: true, triples });
+        }
+        if (request.method === "POST") {
+          let body: any = {};
+          try {
+            body = await request.json();
+          } catch {
+            return Response.json({ ok: false, error: "invalid json body" }, { status: 400 });
+          }
+          if (body.action === "delete" && body.id) {
+            const res = await stub.mnemosyneDeleteTriple(body.id);
+            return Response.json(res);
+          }
+          const res = await stub.mnemosyneAddTriple(body);
+          return Response.json(res);
+        }
+      }
+
+      if (url.pathname === "/api/mnemosyne/clear" && request.method === "POST") {
+        let body: any = {};
+        try {
+          body = await request.json();
+        } catch {
+          body = {};
+        }
+        const res = await stub.mnemosyneClearAll(body.target);
+        return Response.json(res);
+      }
+
+      if (url.pathname === "/api/mnemosyne/consolidate" && request.method === "POST") {
+        let body: any = {};
+        try {
+          body = await request.json();
+        } catch {
+          body = {};
+        }
+        const res = await stub.mnemosyneConsolidate(body);
+        return Response.json(res);
+      }
+    }
+
     return (
       (await routeAgentRequest(request, env)) ??
       new Response("cf-think-agent", {

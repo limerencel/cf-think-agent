@@ -3016,3 +3016,37 @@ aside.workspace-drawer.open {
   font-size: 11px;
 }
 
+/* Mnemosyne Zero-Cloud Memory Styles */
+.mnemosyne-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mnemosyne-stat-card {
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.mnemosyne-stat-card:hover {
+  border-color: var(--accent);
+}
+
+.mnemosyne-cards-list::-webkit-scrollbar,
+.mnemosyne-triples-container div::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.mnemosyne-cards-list::-webkit-scrollbar-thumb,
+.mnemosyne-triples-container div::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 4px;
+}
+
+@media (max-width: 640px) {
+  .mnemosyne-stats-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+
